@@ -228,7 +228,7 @@ app.get('/', (req, res) => {
 });
 
 // Start server
-app.listen(PORT, (0.0.0.0) => {
+app.listen(PORT, '0.0.0.0', () => {
   console.log(`Historical Feed API running on port ${PORT}`);
   
   // Fetch initial articles
