@@ -222,6 +222,11 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok', cacheSize: articleCache.length });
 });
 
+// Add this after the existing /health route
+app.get('/', (req, res) => {
+  res.json({ status: 'ok', message: 'Historical Feed API' });
+});
+
 // Start server
 app.listen(PORT, () => {
   console.log(`Historical Feed API running on port ${PORT}`);
