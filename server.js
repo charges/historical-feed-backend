@@ -227,6 +227,11 @@ app.get('/', (req, res) => {
   res.json({ status: 'ok', message: 'Historical Feed API' });
 });
 
+// Root route for Railway health check
+app.get('/', (req, res) => {
+  res.json({ status: 'ok', message: 'Historical Feed API is running' });
+});
+
 // Start server
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Historical Feed API running on port ${PORT}`);
