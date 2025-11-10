@@ -213,10 +213,14 @@ async function fetchAllArticles() {
 app.get('/api/articles', async (req, res) => {
   try {
     const now = Date.now();
-    if (articleCache.length > 0 && (now - lastRefresh) < CACHE_DURATION) {
+    const force = String(req.query.force || '').toLowerCase();
+    const bypass = force === '1' || force === 'true';
+
+    if (!bypass && articleCache.length > 0 && (now - lastRefresh) < CACHE_DURATION) {
       console.log('Returning cached articles');
       return res.json({ articles: articleCache, cached: true });
     }
+
     const articles = await fetchAllArticles();
     articleCache = articles;
     lastRefresh = now;
@@ -227,20 +231,3 @@ app.get('/api/articles', async (req, res) => {
   }
 });
 
-// --- Health/root ---
-app.get('/health', (req, res) => {
-  res.json({ status: 'ok', cacheSize: articleCache.length });
-});
-app.get('/', (req, res) => {
-  res.json({ status: 'ok', message: 'Historical Feed API is running' });
-});
-
-// --- Start server ---
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Historical Feed API running on port ${PORT}`);
-  fetchAllArticles().then(articles => {
-    articleCache = articles;
-    lastRefresh = Date.now();
-    console.log(`Loaded ${articles.length} initial articles`);
-  }).catch(err => console.error('Initial fetch failed:', err.message));
-});
