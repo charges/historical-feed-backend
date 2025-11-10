@@ -3,55 +3,46 @@ const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
 const cheerio = require('cheerio');
+const axiosRetry = require('axios-retry');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Add automatic retry + backoff on transient errors
-const axiosRetry = require('axios-retry');
-
+// --- Axios retry/backoff (global) ---
 axiosRetry(axios, {
-  retries: 3, // try up to 3 times per request
+  retries: 3,
   retryDelay: (retryCount, error) => {
     const retryAfter = Number(error?.response?.headers?.['retry-after']);
-    if (!Number.isNaN(retryAfter)) {
-      // If the server tells us when to retry (e.g. Wikipedia 429), honor it
-      return retryAfter * 1000;
-    }
-    // otherwise exponential backoff: 1s, 2s, 4s...
-    return Math.min(1000 * 2 ** (retryCount - 1), 8000);
+    if (!Number.isNaN(retryAfter)) return retryAfter * 1000;
+    return Math.min(1000 * 2 ** (retryCount - 1), 8000); // 1s,2s,4s, capped 8s
   },
   retryCondition: (error) => {
-    // Only retry on network errors or 5xx/429 responses
     if (error.code === 'ECONNABORTED') return true;
     const s = error?.response?.status;
     return s === 429 || s === 503 || s === 502 || s === 504;
   },
 });
 
-// Enable CORS for your frontend
-app.use(cors());
+// --- Middleware ---
+app.use(cors()); // for prod, consider: cors({ origin: ['https://charges.github.io', 'http://localhost:8080'] })
 app.use(express.json());
 
-// Cache for scraped articles (refreshes every hour)
+// --- In-memory cache (1 hour) ---
 let articleCache = [];
 let lastRefresh = 0;
-const CACHE_DURATION = 3600000; // 1 hour in milliseconds
+const CACHE_DURATION = 3600000; // 1 hour
 
-// Wikipedia API fetcher
-import axios from 'axios';
-
-// tiny concurrency limiter
+// --- tiny concurrency limiter ---
 async function mapWithLimit(items, limit, mapper) {
   const results = [];
   let i = 0;
-  const workers = Array.from({ length: limit }, async () => {
+  const workers = Array.from({ length: Math.max(1, limit) }, async () => {
     while (i < items.length) {
       const idx = i++;
       try {
         results[idx] = await mapper(items[idx], idx);
       } catch (e) {
-        results[idx] = null; // or { error: e.message }
+        results[idx] = null;
       }
     }
   });
@@ -59,6 +50,7 @@ async function mapWithLimit(items, limit, mapper) {
   return results.filter(Boolean);
 }
 
+// --- Wikipedia fetcher (parallel with cap) ---
 async function fetchWikipediaArticles(count = 6, concurrency = 4) {
   const requests = Array.from({ length: count }, () => ({
     url: 'https://en.wikipedia.org/api/rest_v1/page/random/summary'
@@ -68,7 +60,7 @@ async function fetchWikipediaArticles(count = 6, concurrency = 4) {
     const resp = await axios.get(r.url, {
       timeout: 5000,
       headers: {
-        'User-Agent': 'HumanitiesFeed/1.0 (contact: youremail@example.com)'
+        'User-Agent': 'HumanitiesFeed/1.0 (contact: YOUR_EMAIL_HERE)'
       }
     });
     const d = resp.data;
@@ -80,7 +72,7 @@ async function fetchWikipediaArticles(count = 6, concurrency = 4) {
       thumbnail: d.thumbnail?.source || d.originalimage?.source || null,
       url: d.content_urls?.desktop?.page,
       type: d.description || 'Article',
-      readTime: Math.max(1, Math.ceil((d.extract.split(' ').length || 120)/200)),
+      readTime: Math.max(1, Math.ceil((d.extract.split(' ').length || 120) / 200)),
       category: categorizeArticle(d.title, d.extract),
       source: 'Wikipedia'
     };
@@ -89,7 +81,7 @@ async function fetchWikipediaArticles(count = 6, concurrency = 4) {
   return responses;
 }
 
-// Stanford Encyclopedia scraper
+// --- Stanford Encyclopedia scraper ---
 async function fetchStanfordArticles(count = 3) {
   const articles = [];
   const topics = [
@@ -100,26 +92,21 @@ async function fetchStanfordArticles(count = 3) {
     'descartes-epistemology',
     'plato'
   ];
-  
   const selectedTopics = topics.sort(() => Math.random() - 0.5).slice(0, count);
-  
+
   for (const topic of selectedTopics) {
     try {
-      const response = await axios.get(
-        `https://plato.stanford.edu/entries/${topic}/`,
-        { timeout: 5000 }
-      );
-      
+      const response = await axios.get(`https://plato.stanford.edu/entries/${topic}/`, { timeout: 5000 });
       const $ = cheerio.load(response.data);
       const title = $('#aueditable h1').first().text() || $('h1').first().text();
       const paragraphs = $('#aueditable p').slice(0, 3).map((i, el) => $(el).text()).get();
       const extract = paragraphs.join(' ').substring(0, 500) + '...';
-      
+
       if (title && extract) {
         articles.push({
           id: `stanford-${topic}`,
-          title: title,
-          extract: extract,
+          title,
+          extract,
           thumbnail: 'https://images.unsplash.com/photo-1481627834876-b7833e8f5570?w=400&h=300&fit=crop',
           url: `https://plato.stanford.edu/entries/${topic}/`,
           type: 'Philosophy',
@@ -132,13 +119,11 @@ async function fetchStanfordArticles(count = 3) {
       console.error(`Stanford fetch error for ${topic}:`, error.message);
     }
   }
-  
   return articles;
 }
 
-// Britannica scraper (simplified - Britannica has anti-scraping)
+// --- Britannica (curated) ---
 async function fetchBritannicaArticles(count = 2) {
-  // Britannica blocks scraping, so we'll return curated content
   const curatedArticles = [
     {
       id: 'brit-renaissance',
@@ -163,11 +148,10 @@ async function fetchBritannicaArticles(count = 2) {
       source: 'Britannica'
     }
   ];
-  
   return curatedArticles.slice(0, count);
 }
 
-// Smithsonian fetcher
+// --- Smithsonian (curated) ---
 async function fetchSmithsonianArticles(count = 2) {
   const curatedArticles = [
     {
@@ -193,23 +177,19 @@ async function fetchSmithsonianArticles(count = 2) {
       source: 'Smithsonian'
     }
   ];
-  
   return curatedArticles.slice(0, count);
 }
 
-// Helper function to categorize articles
+// --- Categorization helpers ---
 function categorizeArticle(title, text) {
   const content = (title + ' ' + text).toLowerCase();
-  
   if (content.match(/ancient|egypt|greek|roman|mesopotamia|bc|bce/)) return 'ancient';
   if (content.match(/medieval|middle ages|feudal|crusade|viking/)) return 'medieval';
   if (content.match(/renaissance|reformation|enlightenment|1400|1500|1600|1700/)) return 'early-modern';
   if (content.match(/industrial|revolution|1800|1900|20th century|war|modern/)) return 'modern';
   if (content.match(/technology|invention|computer|press|printing/)) return 'technology';
-  
   return 'ancient';
 }
-
 function categorizeByTopic(topic) {
   if (topic.includes('ancient') || topic.includes('plato') || topic.includes('stoicism')) return 'ancient';
   if (topic.includes('medieval')) return 'medieval';
@@ -217,41 +197,29 @@ function categorizeByTopic(topic) {
   return 'ancient';
 }
 
-// Main fetch function
+// --- Main collector ---
 async function fetchAllArticles() {
   console.log('Fetching fresh articles...');
-  
   const [wikiArticles, stanfordArticles, britannicaArticles, smithsonianArticles] = await Promise.all([
-    fetchWikipediaArticles(6),
+    fetchWikipediaArticles(6),   // parallelized internally
     fetchStanfordArticles(3),
     fetchBritannicaArticles(2),
     fetchSmithsonianArticles(2)
   ]);
-  
-  return [
-    ...wikiArticles,
-    ...stanfordArticles,
-    ...britannicaArticles,
-    ...smithsonianArticles
-  ];
+  return [...wikiArticles, ...stanfordArticles, ...britannicaArticles, ...smithsonianArticles];
 }
 
-// API endpoint
+// --- API endpoint ---
 app.get('/api/articles', async (req, res) => {
   try {
     const now = Date.now();
-    
-    // Return cached articles if still fresh
     if (articleCache.length > 0 && (now - lastRefresh) < CACHE_DURATION) {
       console.log('Returning cached articles');
       return res.json({ articles: articleCache, cached: true });
     }
-    
-    // Fetch fresh articles
     const articles = await fetchAllArticles();
     articleCache = articles;
     lastRefresh = now;
-    
     res.json({ articles, cached: false });
   } catch (error) {
     console.error('Error fetching articles:', error);
@@ -259,29 +227,20 @@ app.get('/api/articles', async (req, res) => {
   }
 });
 
-// Health check endpoint
+// --- Health/root ---
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', cacheSize: articleCache.length });
 });
-
-// Add this after the existing /health route
-app.get('/', (req, res) => {
-  res.json({ status: 'ok', message: 'Historical Feed API' });
-});
-
-// Root route for Railway health check
 app.get('/', (req, res) => {
   res.json({ status: 'ok', message: 'Historical Feed API is running' });
 });
 
-// Start server
+// --- Start server ---
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Historical Feed API running on port ${PORT}`);
-  
-  // Fetch initial articles
   fetchAllArticles().then(articles => {
     articleCache = articles;
     lastRefresh = Date.now();
     console.log(`Loaded ${articles.length} initial articles`);
-  });
+  }).catch(err => console.error('Initial fetch failed:', err.message));
 });
