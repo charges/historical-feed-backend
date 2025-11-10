@@ -6,16 +6,15 @@ const cheerio = require('cheerio');
 const axiosRetry = require('axios-retry');
 
 const app = express();
-// --- Crash logging (make hidden errors visible) ---
+
+// --- Crash logging (surface hidden errors) ---
 process.on('uncaughtException', (err) => {
   console.error('[FATAL] Uncaught exception:', err);
-  // don't exit immediately; let Render collect logs
 });
-
 process.on('unhandledRejection', (reason, p) => {
   console.error('[FATAL] Unhandled Rejection at:', p, 'reason:', reason);
-  // don't exit immediately; let Render collect logs
 });
+
 const PORT = process.env.PORT || 3000;
 
 // --- Axios retry/backoff (global) ---
@@ -70,7 +69,7 @@ async function fetchWikipediaArticles(count = 6, concurrency = 4) {
     const resp = await axios.get(r.url, {
       timeout: 5000,
       headers: {
-        'User-Agent': 'HumanitiesFeed/1.0 (contact: YOUR_EMAIL_HERE)'
+        'User-Agent': 'HumanitiesFeed/1.0 (contact: you@example.com)'
       }
     });
     const d = resp.data;
@@ -167,7 +166,7 @@ async function fetchSmithsonianArticles(count = 2) {
     {
       id: 'smith-tut',
       title: 'The Discovery of King Tut\'s Tomb',
-      extract: 'In 1922, British archaeologist Howard Carter made one of the most spectacular discoveries in archaeological history: the nearly intact tomb of Pharaoh Tutankhamun in Egypt\'s Valley of the Kings. Unlike most royal tombs, which had been plundered in antiquity, King Tut\'s burial chamber contained over 5,000 artifacts.',
+      extract: 'In 1922, British archaeologist Howard Carter made one of the most spectacular discoveries in archaeological history: the nearly intact tomb of Pharaoh Tutankhamun in Egypt\'s Valley of the Kings...',
       thumbnail: 'https://images.unsplash.com/photo-1539768942893-daf53e448371?w=400&h=300&fit=crop',
       url: 'https://www.smithsonianmag.com/history/archaeology/',
       type: 'Archaeology',
@@ -178,7 +177,7 @@ async function fetchSmithsonianArticles(count = 2) {
     {
       id: 'smith-vikings',
       title: 'The Vikings in North America',
-      extract: 'Archaeological evidence confirms that Norse Vikings, led by Leif Erikson, established settlements in North America around 1000 CE, nearly 500 years before Columbus. The L\'Anse aux Meadows site in Newfoundland reveals buildings, tools, and evidence of iron working characteristic of Norse culture.',
+      extract: 'Archaeological evidence confirms that Norse Vikings, led by Leif Erikson, established settlements in North America around 1000 CE...',
       thumbnail: 'https://images.unsplash.com/photo-1583952734649-db24dc49ae80?w=400&h=300&fit=crop',
       url: 'https://www.smithsonianmag.com/history/vikings/',
       type: 'Exploration',
@@ -241,3 +240,32 @@ app.get('/api/articles', async (req, res) => {
   }
 });
 
+// --- health & root (handy on Render) ---
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok', cacheSize: articleCache.length, lastRefresh });
+});
+app.get('/', (req, res) => {
+  res.json({ status: 'ok', message: 'Historical Feed API is running' });
+});
+
+// --- Start server ---
+console.log(`[BOOT] Starting Historical Feed API... (node ${process.version})`);
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`[BOOT] Listening on 0.0.0.0:${PORT}`);
+
+  // Optional prefetch: enable by setting PREFETCH_ON_START=true in Render env vars
+  if (String(process.env.PREFETCH_ON_START).toLowerCase() === 'true') {
+    console.log('[BOOT] Prefetching initial articles...');
+    fetchAllArticles()
+      .then(articles => {
+        articleCache = articles;
+        lastRefresh = Date.now();
+        console.log(`[BOOT] Prefetch loaded ${articles.length} articles`);
+      })
+      .catch(err => {
+        console.error('[BOOT] Prefetch failed:', err?.message || err);
+      });
+  } else {
+    console.log('[BOOT] Skipping prefetch (PREFETCH_ON_START not true)');
+  }
+});
