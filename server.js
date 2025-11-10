@@ -7,6 +7,28 @@ const cheerio = require('cheerio');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// Add automatic retry + backoff on transient errors
+const axiosRetry = require('axios-retry');
+
+axiosRetry(axios, {
+  retries: 3, // try up to 3 times per request
+  retryDelay: (retryCount, error) => {
+    const retryAfter = Number(error?.response?.headers?.['retry-after']);
+    if (!Number.isNaN(retryAfter)) {
+      // If the server tells us when to retry (e.g. Wikipedia 429), honor it
+      return retryAfter * 1000;
+    }
+    // otherwise exponential backoff: 1s, 2s, 4s...
+    return Math.min(1000 * 2 ** (retryCount - 1), 8000);
+  },
+  retryCondition: (error) => {
+    // Only retry on network errors or 5xx/429 responses
+    if (error.code === 'ECONNABORTED') return true;
+    const s = error?.response?.status;
+    return s === 429 || s === 503 || s === 502 || s === 504;
+  },
+});
+
 // Enable CORS for your frontend
 app.use(cors());
 app.use(express.json());
@@ -17,34 +39,54 @@ let lastRefresh = 0;
 const CACHE_DURATION = 3600000; // 1 hour in milliseconds
 
 // Wikipedia API fetcher
-async function fetchWikipediaArticles(count = 5) {
-  const articles = [];
-  
-  for (let i = 0; i < count; i++) {
-    try {
-      const response = await axios.get(
-        'https://en.wikipedia.org/api/rest_v1/page/random/summary'
-      );
-      
-      if (response.data && response.data.extract) {
-        articles.push({
-          id: `wiki-${response.data.pageid}`,
-          title: response.data.title,
-          extract: response.data.extract,
-          thumbnail: response.data.thumbnail?.source || response.data.originalimage?.source || null,
-          url: response.data.content_urls?.desktop?.page,
-          type: response.data.description || 'Article',
-          readTime: Math.max(1, Math.ceil(response.data.extract.split(' ').length / 200)),
-          category: categorizeArticle(response.data.title, response.data.extract),
-          source: 'Wikipedia'
-        });
+import axios from 'axios';
+
+// tiny concurrency limiter
+async function mapWithLimit(items, limit, mapper) {
+  const results = [];
+  let i = 0;
+  const workers = Array.from({ length: limit }, async () => {
+    while (i < items.length) {
+      const idx = i++;
+      try {
+        results[idx] = await mapper(items[idx], idx);
+      } catch (e) {
+        results[idx] = null; // or { error: e.message }
       }
-    } catch (error) {
-      console.error('Wikipedia fetch error:', error.message);
     }
-  }
-  
-  return articles;
+  });
+  await Promise.all(workers);
+  return results.filter(Boolean);
+}
+
+async function fetchWikipediaArticles(count = 6, concurrency = 4) {
+  const requests = Array.from({ length: count }, () => ({
+    url: 'https://en.wikipedia.org/api/rest_v1/page/random/summary'
+  }));
+
+  const responses = await mapWithLimit(requests, concurrency, async (r) => {
+    const resp = await axios.get(r.url, {
+      timeout: 5000,
+      headers: {
+        'User-Agent': 'HumanitiesFeed/1.0 (contact: youremail@example.com)'
+      }
+    });
+    const d = resp.data;
+    if (!d?.extract) return null;
+    return {
+      id: `wiki-${d.pageid}`,
+      title: d.title,
+      extract: d.extract,
+      thumbnail: d.thumbnail?.source || d.originalimage?.source || null,
+      url: d.content_urls?.desktop?.page,
+      type: d.description || 'Article',
+      readTime: Math.max(1, Math.ceil((d.extract.split(' ').length || 120)/200)),
+      category: categorizeArticle(d.title, d.extract),
+      source: 'Wikipedia'
+    };
+  });
+
+  return responses;
 }
 
 // Stanford Encyclopedia scraper
