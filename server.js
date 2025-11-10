@@ -111,7 +111,7 @@ async function fetchWikipediaArticles(count = 6, concurrency = 4) {
 async function wikiSearchTitles(srsearch, limit = 50) {
   const resp = await axios.get('https://en.wikipedia.org/w/api.php', {
     timeout: 8000,
-    headers: { 'User-Agent': 'HumanitiesFeed/1.0 (contact: you@example.com)' },
+    headers: { 'User-Agent': 'HumanitiesFeed/1.0 (contact: chrisharges@gmail.com)' },
     params: {
       action: 'query',
       list: 'search',
@@ -127,23 +127,35 @@ async function wikiSearchTitles(srsearch, limit = 50) {
     .filter(t => !t.toLowerCase().includes('(disambiguation)'));
 }
 
-async function wikiSearchTitles(srsearch, limit = 50) {
-  const resp = await axios.get('https://en.wikipedia.org/w/api.php', {
-    timeout: 8000,
-    headers: { 'User-Agent': 'HumanitiesFeed/1.0 (contact: you@example.com)' },
-    params: {
-      action: 'query',
-      list: 'search',
-      srsearch,
-      srlimit: Math.min(limit, 50), // hard cap
-      format: 'json'
-    }
+// Fetch REST summaries for a list of Wikipedia titles
+async function wikiSummariesForTitles(titles, concurrency = 4) {
+  // reuse your concurrency limiter
+  const requests = titles.map(title => ({
+    url: `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(title)}`
+  }));
+
+  const results = await mapWithLimit(requests, concurrency, async (r) => {
+    const resp = await axios.get(r.url, {
+      timeout: 6000,
+      headers: { 'User-Agent': 'HumanitiesFeed/1.0 (contact: you@example.com)' }
+    });
+    const d = resp.data;
+    if (!d?.title) return null;
+
+    return {
+      id: `wiki-${d.pageid || encodeURIComponent(d.title)}`,
+      title: d.title,
+      extract: d.extract || '',
+      thumbnail: d.thumbnail?.source || d.originalimage?.source || null,
+      url: d.content_urls?.desktop?.page || `https://en.wikipedia.org/wiki/${encodeURIComponent(d.title)}`,
+      type: d.description || 'Article',
+      readTime: Math.max(1, Math.ceil(((d.extract || '').split(' ').length || 120) / 200)),
+      category: categorizeArticle(d.title, d.extract || ''),
+      source: 'Wikipedia'
+    };
   });
-  const hits = resp?.data?.query?.search || [];
-  // Filter out obvious disambiguation pages
-  return hits
-    .map(h => h.title)
-    .filter(t => !t.toLowerCase().includes('(disambiguation)'));
+
+  return results.filter(Boolean);
 }
 
 async function fetchWikipediaByTopic(topicKey, count = 6) {
@@ -338,6 +350,11 @@ app.get('/api/articles', async (req, res) => {
     console.error('Error fetching articles:', error);
     res.status(500).json({ error: 'Failed to fetch articles' });
   }
+});
+
+// --- Topics endpoint (for frontend use) ---
+app.get('/api/topics', (req, res) => {
+  res.json({ topics: Object.keys(WIKI_TOPICS) });
 });
 
 // --- health & root (handy on Render) ---
