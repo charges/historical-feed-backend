@@ -7,6 +7,24 @@ const axiosRetry = require('axios-retry');
 
 const app = express();
 
+// --- Wikipedia topic presets (extend as you like)
+const WIKI_TOPICS = {
+  "american-literature": [
+    'deepcat:"American literature"',
+    'deepcat:"American novelists"',
+    'deepcat:"American poets"',
+    'deepcat:"American short story writers"'
+  ],
+  "italian-renaissance": [
+    'deepcat:"Italian Renaissance"',
+    'deepcat:"Renaissance in Italy"',
+    'deepcat:"Italian Renaissance painters"',
+    'deepcat:"Italian Renaissance architecture"'
+  ],
+  // add more:
+  // "ancient-greece": ['deepcat:"Ancient Greece"', 'deepcat:"Classical Athens"']
+};
+
 // --- Crash logging (surface hidden errors) ---
 process.on('uncaughtException', (err) => {
   console.error('[FATAL] Uncaught exception:', err);
@@ -88,6 +106,80 @@ async function fetchWikipediaArticles(count = 6, concurrency = 4) {
   });
 
   return responses;
+}
+
+async function wikiSearchTitles(srsearch, limit = 50) {
+  const resp = await axios.get('https://en.wikipedia.org/w/api.php', {
+    timeout: 8000,
+    headers: { 'User-Agent': 'HumanitiesFeed/1.0 (contact: you@example.com)' },
+    params: {
+      action: 'query',
+      list: 'search',
+      srsearch,
+      srlimit: Math.min(limit, 50), // hard cap
+      format: 'json'
+    }
+  });
+  const hits = resp?.data?.query?.search || [];
+  // Filter out obvious disambiguation pages
+  return hits
+    .map(h => h.title)
+    .filter(t => !t.toLowerCase().includes('(disambiguation)'));
+}
+
+async function wikiSearchTitles(srsearch, limit = 50) {
+  const resp = await axios.get('https://en.wikipedia.org/w/api.php', {
+    timeout: 8000,
+    headers: { 'User-Agent': 'HumanitiesFeed/1.0 (contact: you@example.com)' },
+    params: {
+      action: 'query',
+      list: 'search',
+      srsearch,
+      srlimit: Math.min(limit, 50), // hard cap
+      format: 'json'
+    }
+  });
+  const hits = resp?.data?.query?.search || [];
+  // Filter out obvious disambiguation pages
+  return hits
+    .map(h => h.title)
+    .filter(t => !t.toLowerCase().includes('(disambiguation)'));
+}
+
+async function fetchWikipediaByTopic(topicKey, count = 6) {
+  const queries = WIKI_TOPICS[topicKey];
+  if (!queries || queries.length === 0) {
+    // fallback to your existing random fetcher if unknown topic
+    return fetchWikipediaArticles(count);
+  }
+
+  // Get a pool of candidates from several related deepcat queries
+  let pool = new Set();
+  for (const q of queries) {
+    try {
+      const titles = await wikiSearchTitles(q, 50);
+      titles.forEach(t => pool.add(t));
+      // Small guard to avoid a huge pool
+      if (pool.size > 300) break;
+    } catch (e) {
+      console.error('wikiSearchTitles error for', q, e.message);
+    }
+  }
+
+  const list = Array.from(pool);
+  if (list.length === 0) {
+    console.warn('No titles found for topic', topicKey, '—falling back to random');
+    return fetchWikipediaArticles(count);
+  }
+
+  // Randomly sample up to `count` titles
+  const sample = [];
+  for (let i = 0; i < Math.min(count, list.length); i++) {
+    const idx = Math.floor(Math.random() * list.length);
+    sample.push(list.splice(idx, 1)[0]);
+  }
+
+  return wikiSummariesForTitles(sample);
 }
 
 // --- Stanford Encyclopedia scraper ---
@@ -207,14 +299,16 @@ function categorizeByTopic(topic) {
 }
 
 // --- Main collector ---
-async function fetchAllArticles() {
-  console.log('Fetching fresh articles...');
+async function fetchAllArticles(topicKey) {
+  console.log('Fetching fresh articles...', topicKey ? `(topic=${topicKey})` : '');
+
   const [wikiArticles, stanfordArticles, britannicaArticles, smithsonianArticles] = await Promise.all([
-    fetchWikipediaArticles(6),   // parallelized internally
+    topicKey ? fetchWikipediaByTopic(topicKey, 6) : fetchWikipediaArticles(6),
     fetchStanfordArticles(3),
     fetchBritannicaArticles(2),
     fetchSmithsonianArticles(2)
   ]);
+
   return [...wikiArticles, ...stanfordArticles, ...britannicaArticles, ...smithsonianArticles];
 }
 
@@ -224,16 +318,22 @@ app.get('/api/articles', async (req, res) => {
     const now = Date.now();
     const force = String(req.query.force || '').toLowerCase();
     const bypass = force === '1' || force === 'true';
+    const topicKey = String(req.query.topic || '').toLowerCase(); // e.g., "american-literature"
 
-    if (!bypass && articleCache.length > 0 && (now - lastRefresh) < CACHE_DURATION) {
+    if (!bypass && !topicKey && articleCache.length > 0 && (now - lastRefresh) < CACHE_DURATION) {
       console.log('Returning cached articles');
       return res.json({ articles: articleCache, cached: true });
     }
 
-    const articles = await fetchAllArticles();
-    articleCache = articles;
-    lastRefresh = now;
-    res.json({ articles, cached: false });
+    const articles = await fetchAllArticles(topicKey || undefined);
+
+    // Only update the global cache for the default (non-topic) feed
+    if (!topicKey) {
+      articleCache = articles;
+      lastRefresh = now;
+    }
+
+    res.json({ articles, cached: false, topic: topicKey || null });
   } catch (error) {
     console.error('Error fetching articles:', error);
     res.status(500).json({ error: 'Failed to fetch articles' });
