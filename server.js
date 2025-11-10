@@ -6,6 +6,16 @@ const cheerio = require('cheerio');
 const axiosRetry = require('axios-retry');
 
 const app = express();
+// --- Crash logging (make hidden errors visible) ---
+process.on('uncaughtException', (err) => {
+  console.error('[FATAL] Uncaught exception:', err);
+  // don't exit immediately; let Render collect logs
+});
+
+process.on('unhandledRejection', (reason, p) => {
+  console.error('[FATAL] Unhandled Rejection at:', p, 'reason:', reason);
+  // don't exit immediately; let Render collect logs
+});
 const PORT = process.env.PORT || 3000;
 
 // --- Axios retry/backoff (global) ---
