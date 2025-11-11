@@ -7,7 +7,7 @@ const axiosRetry = require('axios-retry');
 
 const app = express();
 
-// --- Wikipedia topic presets (extend as you like)
+// --- Wikipedia topic presets (search-based deepcat fallback) ---
 const WIKI_TOPICS = {
   "american-literature": [
     'deepcat:"American literature"',
@@ -21,11 +21,9 @@ const WIKI_TOPICS = {
     'deepcat:"Italian Renaissance painters"',
     'deepcat:"Italian Renaissance architecture"'
   ],
-  // add more:
-  // "ancient-greece": ['deepcat:"Ancient Greece"', 'deepcat:"Classical Athens"']
 };
 
-// Prefer exact category crawl over deepcat:
+// --- Category-first topic map (preferred) ---
 const WIKI_CATEGORY_TOPICS = {
   "american-literature": [
     "Category:American literature",
@@ -40,7 +38,7 @@ const WIKI_CATEGORY_TOPICS = {
   ]
 };
 
-// --- Crash logging (surface hidden errors) ---
+// --- Crash logging ---
 process.on('uncaughtException', (err) => {
   console.error('[FATAL] Uncaught exception:', err);
 });
@@ -66,7 +64,7 @@ axiosRetry(axios, {
 });
 
 // --- Middleware ---
-app.use(cors()); // for prod, consider: cors({ origin: ['https://charges.github.io', 'http://localhost:8080'] })
+app.use(cors()); // consider: cors({ origin: ['https://charges.github.io', 'http://localhost:8080'] })
 app.use(express.json());
 
 // --- In-memory cache (1 hour) ---
@@ -92,7 +90,7 @@ async function mapWithLimit(items, limit, mapper) {
   return results.filter(Boolean);
 }
 
-// --- Wikipedia fetcher (parallel with cap) ---
+// --- Wikipedia RANDOM fetcher (fallback) ---
 async function fetchWikipediaArticles(count = 6, concurrency = 4) {
   const requests = Array.from({ length: count }, () => ({
     url: 'https://en.wikipedia.org/api/rest_v1/page/random/summary'
@@ -101,14 +99,12 @@ async function fetchWikipediaArticles(count = 6, concurrency = 4) {
   const responses = await mapWithLimit(requests, concurrency, async (r) => {
     const resp = await axios.get(r.url, {
       timeout: 5000,
-      headers: {
-        'User-Agent': 'HumanitiesFeed/1.0 (contact: you@example.com)'
-      }
+      headers: { 'User-Agent': 'HumanitiesFeed/1.0 (contact: you@example.com)' }
     });
     const d = resp.data;
     if (!d?.extract) return null;
     return {
-      id: `wiki-${d.pageid}`,
+      id: `wiki-${d.pageid || encodeURIComponent(d.title)}`,
       title: d.title,
       extract: d.extract,
       thumbnail: d.thumbnail?.source || d.originalimage?.source || null,
@@ -123,28 +119,27 @@ async function fetchWikipediaArticles(count = 6, concurrency = 4) {
   return responses;
 }
 
+// --- Wikipedia: search helper (deepcat fallback) ---
 async function wikiSearchTitles(srsearch, limit = 50) {
   const resp = await axios.get('https://en.wikipedia.org/w/api.php', {
     timeout: 8000,
-    headers: { 'User-Agent': 'HumanitiesFeed/1.0 (contact: chrisharges@gmail.com)' },
+    headers: { 'User-Agent': 'HumanitiesFeed/1.0 (contact: you@example.com)' },
     params: {
       action: 'query',
       list: 'search',
       srsearch,
-      srlimit: Math.min(limit, 50), // hard cap
+      srlimit: Math.min(limit, 50),
       format: 'json'
     }
   });
   const hits = resp?.data?.query?.search || [];
-  // Filter out obvious disambiguation pages
   return hits
     .map(h => h.title)
     .filter(t => !t.toLowerCase().includes('(disambiguation)'));
 }
 
-// Fetch REST summaries for a list of Wikipedia titles
+// --- Wikipedia: summaries for given titles ---
 async function wikiSummariesForTitles(titles, concurrency = 4) {
-  // reuse your concurrency limiter
   const requests = titles.map(title => ({
     url: `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(title)}`
   }));
@@ -173,7 +168,7 @@ async function wikiSummariesForTitles(titles, concurrency = 4) {
   return results.filter(Boolean);
 }
 
-// Fetch members of a single category (pages or subcats)
+// --- Wikipedia: CategoryMembers crawl (topic-first) ---
 async function getCategoryMembers(cmtitle, cmtype = 'page|subcat', cmlimit = 200, cmcontinue) {
   const resp = await axios.get('https://en.wikipedia.org/w/api.php', {
     timeout: 10000,
@@ -183,9 +178,9 @@ async function getCategoryMembers(cmtitle, cmtype = 'page|subcat', cmlimit = 200
       list: 'categorymembers',
       cmtitle,
       cmtype,
-      cmnamespace: 0,           // ns0 = main/article space
+      cmnamespace: 0, // main/article space
       cmlimit: Math.min(cmlimit, 500),
-      continue: '',              // enable continuation
+      continue: '',
       cmcontinue,
       format: 'json'
     }
@@ -193,7 +188,6 @@ async function getCategoryMembers(cmtitle, cmtype = 'page|subcat', cmlimit = 200
   return resp.data;
 }
 
-// Breadth-first crawl: pages + subcats up to `maxDepth`
 async function crawlCategories(seedCategories, { maxDepth = 1, maxPages = 400 } = {}) {
   const seenCats = new Set();
   const pages = new Set();
@@ -229,11 +223,10 @@ async function fetchWikipediaByCategoryTopic(topicKey, count = 6) {
   const seedCats = WIKI_CATEGORY_TOPICS[topicKey];
   if (!seedCats) return null; // let caller decide fallback
 
-  // Crawl up to 1 level of subcats; adjust as you like
   const titles = await crawlCategories(seedCats, { maxDepth: 1, maxPages: 500 });
   if (!titles.length) return [];
 
-  // Random sample `count` titles
+  // sample `count`
   const pool = titles.slice();
   const sample = [];
   for (let i = 0; i < Math.min(count, pool.length); i++) {
@@ -243,53 +236,43 @@ async function fetchWikipediaByCategoryTopic(topicKey, count = 6) {
   return wikiSummariesForTitles(sample);
 }
 
-// Update existing fetchWikipediaByTopic to prefer categories:
+// --- Wikipedia: topic dispatcher (category-first, deepcat fallback, then random) ---
 async function fetchWikipediaByTopic(topicKey, count = 6) {
-  // 1) Try category crawl (reliable, on-topic)
-  const catResult = await fetchWikipediaByCategoryTopic(topicKey, count).catch(() => null);
-  if (Array.isArray(catResult) && catResult.length) return catResult;
-
-  // 2) Fall back to your current deepcat search approach
-  const queries = WIKI_TOPICS[topicKey];
-  if (!queries || queries.length === 0) {
-    return fetchWikipediaArticles(count); // last resort: random
+  // Prefer category crawl
+  try {
+    const catResult = await fetchWikipediaByCategoryTopic(topicKey, count);
+    if (Array.isArray(catResult) && catResult.length) return catResult;
+  } catch (e) {
+    console.error('Category crawl failed:', e?.message || e);
   }
 
-  let pool = new Set();
-  for (const q of queries) {
-    try {
-      const titles = await wikiSearchTitles(q, 50);
-      titles.forEach(t => pool.add(t));
-      if (pool.size > 300) break;
-    } catch (e) {
-      console.error('wikiSearchTitles error for', q, e.message);
+  // Fallback: deepcat search
+  const queries = WIKI_TOPICS[topicKey];
+  if (queries && queries.length) {
+    let pool = new Set();
+    for (const q of queries) {
+      try {
+        const titles = await wikiSearchTitles(q, 50);
+        titles.forEach(t => pool.add(t));
+        if (pool.size > 300) break;
+      } catch (e) {
+        console.error('wikiSearchTitles error for', q, e.message);
+      }
+    }
+    const list = Array.from(pool);
+    if (list.length) {
+      const sample = [];
+      for (let i = 0; i < Math.min(count, list.length); i++) {
+        const idx = Math.floor(Math.random() * list.length);
+        sample.push(list.splice(idx, 1)[0]);
+      }
+      return wikiSummariesForTitles(sample);
     }
   }
-  const list = Array.from(pool);
-  if (!list.length) return fetchWikipediaArticles(count);
 
-  const sample = [];
-  for (let i = 0; i < Math.min(count, list.length); i++) {
-    const idx = Math.floor(Math.random() * list.length);
-    sample.push(list.splice(idx, 1)[0]);
-  }
-  return wikiSummariesForTitles(sample);
-}
-
-  const list = Array.from(pool);
-  if (list.length === 0) {
-    console.warn('No titles found for topic', topicKey, '—falling back to random');
-    return fetchWikipediaArticles(count);
-  }
-
-  // Randomly sample up to `count` titles
-  const sample = [];
-  for (let i = 0; i < Math.min(count, list.length); i++) {
-    const idx = Math.floor(Math.random() * list.length);
-    sample.push(list.splice(idx, 1)[0]);
-  }
-
-  return wikiSummariesForTitles(sample);
+  // Last resort: random
+  console.warn('No titles found for topic', topicKey, '—falling back to random');
+  return fetchWikipediaArticles(count);
 }
 
 // --- Stanford Encyclopedia scraper ---
@@ -339,7 +322,7 @@ async function fetchBritannicaArticles(count = 2) {
     {
       id: 'brit-renaissance',
       title: 'The Renaissance',
-      extract: 'The Renaissance, spanning the 14th to 17th centuries, marked a cultural rebirth in Europe characterized by renewed interest in classical learning and humanism. Beginning in Italy, it brought revolutionary developments in art, with masters like Leonardo da Vinci and Michelangelo, and transformed literature, science, and philosophy.',
+      extract: 'The Renaissance, spanning the 14th to 17th centuries, marked a cultural rebirth in Europe characterized by renewed interest in classical learning and humanism.',
       thumbnail: 'https://images.unsplash.com/photo-1549834125-82d3c48159a3?w=400&h=300&fit=crop',
       url: 'https://www.britannica.com/event/Renaissance',
       type: 'Cultural History',
@@ -350,7 +333,7 @@ async function fetchBritannicaArticles(count = 2) {
     {
       id: 'brit-mesopotamia',
       title: 'Mesopotamian Civilization',
-      extract: 'Mesopotamia, the land between the Tigris and Euphrates rivers, is often called the cradle of civilization. Here, around 3500 BCE, the Sumerians developed one of the world\'s first writing systems (cuneiform), built the first cities, and created complex irrigation systems.',
+      extract: 'Mesopotamia is often called the cradle of civilization...',
       thumbnail: 'https://images.unsplash.com/photo-1580674285054-bed31e145f59?w=400&h=300&fit=crop',
       url: 'https://www.britannica.com/place/Mesopotamia-historical-region-Asia',
       type: 'Ancient Civilization',
@@ -368,7 +351,7 @@ async function fetchSmithsonianArticles(count = 2) {
     {
       id: 'smith-tut',
       title: 'The Discovery of King Tut\'s Tomb',
-      extract: 'In 1922, British archaeologist Howard Carter made one of the most spectacular discoveries in archaeological history: the nearly intact tomb of Pharaoh Tutankhamun in Egypt\'s Valley of the Kings...',
+      extract: 'In 1922, Howard Carter found the nearly intact tomb of Pharaoh Tutankhamun...',
       thumbnail: 'https://images.unsplash.com/photo-1539768942893-daf53e448371?w=400&h=300&fit=crop',
       url: 'https://www.smithsonianmag.com/history/archaeology/',
       type: 'Archaeology',
@@ -379,7 +362,7 @@ async function fetchSmithsonianArticles(count = 2) {
     {
       id: 'smith-vikings',
       title: 'The Vikings in North America',
-      extract: 'Archaeological evidence confirms that Norse Vikings, led by Leif Erikson, established settlements in North America around 1000 CE...',
+      extract: 'Evidence confirms Norse Vikings reached North America around 1000 CE...',
       thumbnail: 'https://images.unsplash.com/photo-1583952734649-db24dc49ae80?w=400&h=300&fit=crop',
       url: 'https://www.smithsonianmag.com/history/vikings/',
       type: 'Exploration',
@@ -411,14 +394,12 @@ function categorizeByTopic(topic) {
 // --- Main collector ---
 async function fetchAllArticles(topicKey) {
   console.log('Fetching fresh articles...', topicKey ? `(topic=${topicKey})` : '');
-
   const [wikiArticles, stanfordArticles, britannicaArticles, smithsonianArticles] = await Promise.all([
     topicKey ? fetchWikipediaByTopic(topicKey, 6) : fetchWikipediaArticles(6),
     fetchStanfordArticles(3),
     fetchBritannicaArticles(2),
     fetchSmithsonianArticles(2)
   ]);
-
   return [...wikiArticles, ...stanfordArticles, ...britannicaArticles, ...smithsonianArticles];
 }
 
@@ -428,7 +409,7 @@ app.get('/api/articles', async (req, res) => {
     const now = Date.now();
     const force = String(req.query.force || '').toLowerCase();
     const bypass = force === '1' || force === 'true';
-    const topicKey = String(req.query.topic || '').toLowerCase(); // e.g., "american-literature"
+    const topicKey = String(req.query.topic || '').toLowerCase();
 
     if (!bypass && !topicKey && articleCache.length > 0 && (now - lastRefresh) < CACHE_DURATION) {
       console.log('Returning cached articles');
@@ -437,7 +418,6 @@ app.get('/api/articles', async (req, res) => {
 
     const articles = await fetchAllArticles(topicKey || undefined);
 
-    // Only update the global cache for the default (non-topic) feed
     if (!topicKey) {
       articleCache = articles;
       lastRefresh = now;
@@ -450,12 +430,7 @@ app.get('/api/articles', async (req, res) => {
   }
 });
 
-// --- Topics endpoint (for frontend use) ---
-app.get('/api/topics', (req, res) => {
-  res.json({ topics: Object.keys(WIKI_TOPICS) });
-});
-
-// --- health & root (handy on Render) ---
+// --- health & root ---
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', cacheSize: articleCache.length, lastRefresh });
 });
@@ -467,8 +442,6 @@ app.get('/', (req, res) => {
 console.log(`[BOOT] Starting Historical Feed API... (node ${process.version})`);
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`[BOOT] Listening on 0.0.0.0:${PORT}`);
-
-  // Optional prefetch: enable by setting PREFETCH_ON_START=true in Render env vars
   if (String(process.env.PREFETCH_ON_START).toLowerCase() === 'true') {
     console.log('[BOOT] Prefetching initial articles...');
     fetchAllArticles()
