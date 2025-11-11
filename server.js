@@ -25,6 +25,21 @@ const WIKI_TOPICS = {
   // "ancient-greece": ['deepcat:"Ancient Greece"', 'deepcat:"Classical Athens"']
 };
 
+// Prefer exact category crawl over deepcat:
+const WIKI_CATEGORY_TOPICS = {
+  "american-literature": [
+    "Category:American literature",
+    "Category:American novelists",
+    "Category:American poets",
+    "Category:American short story writers"
+  ],
+  "italian-renaissance": [
+    "Category:Italian Renaissance",
+    "Category:Italian Renaissance painters",
+    "Category:Italian Renaissance architecture"
+  ]
+};
+
 // --- Crash logging (surface hidden errors) ---
 process.on('uncaughtException', (err) => {
   console.error('[FATAL] Uncaught exception:', err);
@@ -158,25 +173,108 @@ async function wikiSummariesForTitles(titles, concurrency = 4) {
   return results.filter(Boolean);
 }
 
-async function fetchWikipediaByTopic(topicKey, count = 6) {
-  const queries = WIKI_TOPICS[topicKey];
-  if (!queries || queries.length === 0) {
-    // fallback to your existing random fetcher if unknown topic
-    return fetchWikipediaArticles(count);
+// Fetch members of a single category (pages or subcats)
+async function getCategoryMembers(cmtitle, cmtype = 'page|subcat', cmlimit = 200, cmcontinue) {
+  const resp = await axios.get('https://en.wikipedia.org/w/api.php', {
+    timeout: 10000,
+    headers: { 'User-Agent': 'HumanitiesFeed/1.0 (contact: you@example.com)' },
+    params: {
+      action: 'query',
+      list: 'categorymembers',
+      cmtitle,
+      cmtype,
+      cmnamespace: 0,           // ns0 = main/article space
+      cmlimit: Math.min(cmlimit, 500),
+      continue: '',              // enable continuation
+      cmcontinue,
+      format: 'json'
+    }
+  });
+  return resp.data;
+}
+
+// Breadth-first crawl: pages + subcats up to `maxDepth`
+async function crawlCategories(seedCategories, { maxDepth = 1, maxPages = 400 } = {}) {
+  const seenCats = new Set();
+  const pages = new Set();
+  let queue = seedCategories.slice().map(c => ({ title: c, depth: 0 }));
+
+  while (queue.length > 0 && pages.size < maxPages) {
+    const { title, depth } = queue.shift();
+    if (seenCats.has(title)) continue;
+    seenCats.add(title);
+
+    let cmcontinue;
+    do {
+      const data = await getCategoryMembers(title, 'page|subcat', 200, cmcontinue);
+      const members = data?.query?.categorymembers || [];
+      for (const m of members) {
+        if (m.ns === 14) { // subcategory
+          if (depth < maxDepth) {
+            queue.push({ title: `Category:${m.title.replace(/^Category:/, '')}`, depth: depth + 1 });
+          }
+        } else {
+          pages.add(m.title);
+          if (pages.size >= maxPages) break;
+        }
+      }
+      cmcontinue = data?.continue?.cmcontinue;
+    } while (cmcontinue && pages.size < maxPages);
   }
 
-  // Get a pool of candidates from several related deepcat queries
+  return Array.from(pages);
+}
+
+async function fetchWikipediaByCategoryTopic(topicKey, count = 6) {
+  const seedCats = WIKI_CATEGORY_TOPICS[topicKey];
+  if (!seedCats) return null; // let caller decide fallback
+
+  // Crawl up to 1 level of subcats; adjust as you like
+  const titles = await crawlCategories(seedCats, { maxDepth: 1, maxPages: 500 });
+  if (!titles.length) return [];
+
+  // Random sample `count` titles
+  const pool = titles.slice();
+  const sample = [];
+  for (let i = 0; i < Math.min(count, pool.length); i++) {
+    const idx = Math.floor(Math.random() * pool.length);
+    sample.push(pool.splice(idx, 1)[0]);
+  }
+  return wikiSummariesForTitles(sample);
+}
+
+// Update existing fetchWikipediaByTopic to prefer categories:
+async function fetchWikipediaByTopic(topicKey, count = 6) {
+  // 1) Try category crawl (reliable, on-topic)
+  const catResult = await fetchWikipediaByCategoryTopic(topicKey, count).catch(() => null);
+  if (Array.isArray(catResult) && catResult.length) return catResult;
+
+  // 2) Fall back to your current deepcat search approach
+  const queries = WIKI_TOPICS[topicKey];
+  if (!queries || queries.length === 0) {
+    return fetchWikipediaArticles(count); // last resort: random
+  }
+
   let pool = new Set();
   for (const q of queries) {
     try {
       const titles = await wikiSearchTitles(q, 50);
       titles.forEach(t => pool.add(t));
-      // Small guard to avoid a huge pool
       if (pool.size > 300) break;
     } catch (e) {
       console.error('wikiSearchTitles error for', q, e.message);
     }
   }
+  const list = Array.from(pool);
+  if (!list.length) return fetchWikipediaArticles(count);
+
+  const sample = [];
+  for (let i = 0; i < Math.min(count, list.length); i++) {
+    const idx = Math.floor(Math.random() * list.length);
+    sample.push(list.splice(idx, 1)[0]);
+  }
+  return wikiSummariesForTitles(sample);
+}
 
   const list = Array.from(pool);
   if (list.length === 0) {
