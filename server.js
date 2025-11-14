@@ -275,45 +275,101 @@ async function fetchWikipediaByTopic(topicKey, count = 6) {
   return fetchWikipediaArticles(count);
 }
 
-// --- Stanford Encyclopedia scraper ---
-async function fetchStanfordArticles(count = 3) {
-  const articles = [];
-  const topics = [
-    'ancient-skepticism',
-    'conscience-medieval',
-    'enlightenment',
-    'stoicism',
-    'descartes-epistemology',
-    'plato'
-  ];
-  const selectedTopics = topics.sort(() => Math.random() - 0.5).slice(0, count);
+// --- SEP helpers ---
+// Crawl the main SEP contents page and return an array of { title, url }
+async function sepListAllEntries() {
+  const url = 'https://plato.stanford.edu/contents.html';
+  const resp = await axios.get(url, {
+    timeout: 10000,
+    headers: { 'User-Agent': 'HumanitiesFeed/1.0 (contact: you@example.com)' }
+  });
+  const $ = cheerio.load(resp.data);
 
-  for (const topic of selectedTopics) {
-    try {
-      const response = await axios.get(`https://plato.stanford.edu/entries/${topic}/`, { timeout: 5000 });
-      const $ = cheerio.load(response.data);
-      const title = $('#aueditable h1').first().text() || $('h1').first().text();
-      const paragraphs = $('#aueditable p').slice(0, 3).map((i, el) => $(el).text()).get();
-      const extract = paragraphs.join(' ').substring(0, 500) + '...';
-
-      if (title && extract) {
-        articles.push({
-          id: `stanford-${topic}`,
-          title,
-          extract,
-          thumbnail: 'https://images.unsplash.com/photo-1481627834876-b7833e8f5570?w=400&h=300&fit=crop',
-          url: `https://plato.stanford.edu/entries/${topic}/`,
-          type: 'Philosophy',
-          readTime: 7,
-          category: categorizeByTopic(topic),
-          source: 'Stanford Encyclopedia'
-        });
-      }
-    } catch (error) {
-      console.error(`Stanford fetch error for ${topic}:`, error.message);
+  const entries = [];
+  $('a').each((_, a) => {
+    const href = $(a).attr('href') || '';
+    const text = $(a).text().trim();
+    if (href.startsWith('/entries/') && text) {
+      const absolute = new URL(href, 'https://plato.stanford.edu').toString();
+      entries.push({ title: text, url: absolute });
     }
+  });
+
+  const seen = new Set();
+  return entries.filter(e => {
+    if (seen.has(e.url)) return false;
+    seen.add(e.url);
+    return true;
+  });
+}
+
+// Fetch a single SEP article card (title/extract/url/etc.)
+async function sepFetchArticleCard(entryUrl) {
+  const resp = await axios.get(entryUrl, {
+    timeout: 10000,
+    headers: { 'User-Agent': 'HumanitiesFeed/1.0 (contact: you@example.com)' }
+  });
+  const $ = cheerio.load(resp.data);
+
+  const title =
+    $('#aueditable h1').first().text().trim() ||
+    $('h1').first().text().trim() ||
+    'Stanford Encyclopedia Entry';
+
+  const paras = $('#aueditable p')
+    .slice(0, 3)
+    .map((i, el) => $(el).text().trim())
+    .get();
+
+  const extract = (paras.join(' ') || '').substring(0, 600) + (paras.length ? '…' : '');
+
+  return {
+    id: `stanford-${encodeURIComponent(entryUrl)}`,
+    title,
+    extract,
+    thumbnail: 'https://images.unsplash.com/photo-1481627834876-b7833e8f5570?w=400&h=300&fit=crop',
+    url: entryUrl,
+    type: 'Philosophy',
+    readTime: Math.max(3, Math.ceil((extract.split(' ').length || 400) / 200)),
+    category: 'early-modern', // or whatever you prefer as a default
+    source: 'Stanford Encyclopedia'
+  };
+}
+
+// --- Stanford Encyclopedia (random, not topic-filtered) ---
+async function fetchStanfordArticles(count = 3) {
+  try {
+    // Get the master list of entries from contents.html
+    const all = await sepListAllEntries();
+
+    if (!all.length) {
+      console.warn('[SEP] No entries found on contents page');
+      return [];
+    }
+
+    // Randomly sample `count` entries from the list
+    const pool = all.slice();
+    const chosen = [];
+    for (let i = 0; i < Math.min(count, pool.length); i++) {
+      const idx = Math.floor(Math.random() * pool.length);
+      chosen.push(pool.splice(idx, 1)[0]);
+    }
+
+    // Fetch article cards for the chosen entries with concurrency limit
+    const cards = await mapWithLimit(chosen, 3, async (entry) => {
+      try {
+        return await sepFetchArticleCard(entry.url);
+      } catch (err) {
+        console.error('[SEP] fetch error for', entry.url, err.message);
+        return null;
+      }
+    });
+
+    return cards.filter(Boolean);
+  } catch (err) {
+    console.error('[SEP] Failed to fetch random entries:', err.message);
+    return [];
   }
-  return articles;
 }
 
 // --- Britannica (curated) ---
