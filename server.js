@@ -286,14 +286,16 @@ async function sepListAllEntries() {
   const $ = cheerio.load(resp.data);
 
   const entries = [];
-  $('a').each((_, a) => {
-    const href = $(a).attr('href') || '';
-    const text = $(a).text().trim();
-if ((href.startsWith('/entries/') || href.startsWith('entries/')) && text) {
-  const absolute = new URL(href, 'https://plato.stanford.edu').toString();
-  entries.push({ title: text, url: absolute });
-}
-  });
+$('a').each((_, a) => {
+  const href = $(a).attr('href') || '';
+  const text = $(a).text().trim();
+
+  // accept both "entries/..." and "/entries/..."
+  if ((href.startsWith('/entries/') || href.startsWith('entries/')) && text) {
+    const absolute = new URL(href, 'https://plato.stanford.edu').toString();
+    entries.push({ title: text, url: absolute });
+  }
+});
 
   const seen = new Set();
   return entries.filter(e => {
