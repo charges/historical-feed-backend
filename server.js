@@ -486,6 +486,16 @@ app.get('/api/articles', async (req, res) => {
   }
 });
 
+app.get('/debug/stanford', async (req, res) => {
+  try {
+    const cards = await fetchStanfordArticles(3);
+    res.json({ count: cards.length, cards });
+  } catch (err) {
+    console.error('[DEBUG /debug/stanford] error:', err);
+    res.status(500).json({ error: err.message || String(err) });
+  }
+});
+
 // --- health & root ---
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', cacheSize: articleCache.length, lastRefresh });
