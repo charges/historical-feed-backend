@@ -450,15 +450,42 @@ function categorizeByTopic(topic) {
 }
 
 // --- Main collector ---
+// --- Main collector ---
 async function fetchAllArticles(topicKey) {
-  console.log('Fetching fresh articles...', topicKey ? `(topic=${topicKey})` : '');
-  const [wikiArticles, stanfordArticles, britannicaArticles, smithsonianArticles] = await Promise.all([
-    topicKey ? fetchWikipediaByTopic(topicKey, 6) : fetchWikipediaArticles(6),
-    fetchStanfordArticles(3),
-    fetchBritannicaArticles(2),
-    fetchSmithsonianArticles(2)
-  ]);
-  return [...wikiArticles, ...stanfordArticles, ...britannicaArticles, ...smithsonianArticles];
+  // If no topicKey: pull from *all* WIKI_CATEGORY_TOPICS, not random
+  const label = topicKey ? `(topic=${topicKey})` : '(all wiki topics)';
+  console.log('Fetching fresh articles...', label);
+
+  let wikiPromise;
+
+  if (!topicKey) {
+    // union of all WIKI_CATEGORY_TOPICS
+    const topicKeys = Object.keys(WIKI_CATEGORY_TOPICS);
+    // how many wiki cards per topic; tweak if you like
+    const PER_TOPIC = 3;
+
+    wikiPromise = Promise.all(
+      topicKeys.map(k => fetchWikipediaByTopic(k, PER_TOPIC))
+    ).then(arrays => arrays.flat());
+  } else {
+    // single-topic feed (American lit, Italian Renaissance, etc.)
+    wikiPromise = fetchWikipediaByTopic(topicKey, 6);
+  }
+
+  const [wikiArticles, stanfordArticles, britannicaArticles, smithsonianArticles] =
+    await Promise.all([
+      wikiPromise,
+      fetchStanfordArticles(3),
+      fetchBritannicaArticles(2),
+      fetchSmithsonianArticles(2)
+    ]);
+
+  return [
+    ...wikiArticles,
+    ...stanfordArticles,
+    ...britannicaArticles,
+    ...smithsonianArticles
+  ];
 }
 
 // --- API endpoint ---
