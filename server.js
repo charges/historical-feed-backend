@@ -370,54 +370,71 @@ async function fetchStanfordArticles(count = 3) {
   }
 }
 
-// --- Smithsonian (dynamic from History index) ---
+const SMITHSONIAN_CATEGORY_URLS = [
+  'https://www.smithsonianmag.com/category/archaeology/',
+  'https://www.smithsonianmag.com/category/us-history/',
+  'https://www.smithsonianmag.com/category/world-history/',
+  'https://www.smithsonianmag.com/category/arts-culture/'
+];
 
-// Scrape the main Smithsonian History page for article cards
+// --- Smithsonian (dynamic from multiple category index pages) ---
 async function smithsonianListHistoryArticles() {
-  // Use the canonical category URL (this is what the site redirects to)
-  const url = 'https://www.smithsonianmag.com/category/history/';
-  const resp = await axios.get(url, {
-    timeout: 10000,
-    headers: {
-      // Pretend to be a regular browser; some sites are picky
-      'User-Agent':
-        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) ' +
-        'AppleWebKit/537.36 (KHTML, like Gecko) ' +
-        'Chrome/120.0.0.0 Safari/537.36'
-    }
-  });
-
-  const $ = cheerio.load(resp.data);
   const items = [];
 
-  // Article titles on the History feed are rendered as <h3><a>Title</a></h3>
-  $('h3 a').each((_, el) => {
-    const title = $(el).text().trim();
-    let href = $(el).attr('href') || '';
-    if (!title || !href) return;
+  for (const url of SMITHSONIAN_CATEGORY_URLS) {
+    let resp;
+    try {
+      resp = await axios.get(url, {
+        timeout: 10000,
+        headers: {
+          // Slightly more browser-like UA; some CDNs care
+          'User-Agent': 'Mozilla/5.0 (compatible; HumanitiesFeedBot/1.0; +https://example.com/bot-info)'
+        }
+      });
+    } catch (err) {
+      console.error('[Smithsonian] HTTP error for', url, '-', err.message || err);
+      continue;
+    }
 
-    // Make URL absolute
-    const fullUrl = new URL(href, url).toString();
+    const html = resp.data || '';
+    const $ = cheerio.load(html);
 
-    // Try to grab a short summary, usually the text near the heading
-    let summary =
-      $(el).closest('h3').next().text().trim() || // next sibling text (often a <p>)
-      $(el).parent().next().text().trim();
+    // On category pages, article links are generally in <h2><a> or <h3><a>
+    $('h2 a, h3 a').each((_, el) => {
+      const title = $(el).text().trim();
+      let href = $(el).attr('href') || '';
+      if (!title || !href) return;
 
-    items.push({
-      title,
-      url: fullUrl,
-      summary
+      // Make URL absolute
+      const fullUrl = new URL(href, url).toString();
+
+      // Skip other category/tag/nav links; keep "real" article URLs
+      if (fullUrl.includes('/category/') || fullUrl.includes('/tag/')) return;
+
+      // Grab a short blurb: usually the <p> right after the card heading
+      const summary =
+        $(el).closest('h2, h3').next('p').text().trim() ||
+        $(el).parent().next('p').text().trim();
+
+      items.push({
+        title,
+        url: fullUrl,
+        summary
+      });
     });
-  });
+  }
 
   // De-duplicate by URL
   const seen = new Set();
-  return items.filter(item => {
+  const unique = items.filter(item => {
     if (seen.has(item.url)) return false;
     seen.add(item.url);
     return true;
   });
+
+  console.log(`[Smithsonian] Parsed ${unique.length} items from ${SMITHSONIAN_CATEGORY_URLS.length} category pages`);
+
+  return unique;
 }
 
 async function fetchSmithsonianArticles(count = 2) {
@@ -543,8 +560,14 @@ app.get('/debug/stanford', async (req, res) => {
 // --- Debugger for Smithsonian Content ---
 app.get('/debug/smithsonian', async (req, res) => {
   try {
-    const cards = await fetchSmithsonianArticles(5);
-    res.json({ count: cards.length, cards });
+    const raw = await smithsonianListHistoryArticles();
+    const cards = await fetchSmithsonianArticles(3);
+    res.json({
+      rawCount: raw.length,
+      cardCount: cards.length,
+      rawSample: raw.slice(0, 5),
+      cards
+    });
   } catch (err) {
     console.error('[DEBUG /debug/smithsonian] error:', err);
     res.status(500).json({ error: err.message || String(err) });
