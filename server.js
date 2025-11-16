@@ -286,16 +286,16 @@ async function sepListAllEntries() {
   const $ = cheerio.load(resp.data);
 
   const entries = [];
-$('a').each((_, a) => {
-  const href = $(a).attr('href') || '';
-  const text = $(a).text().trim();
+  $('a').each((_, a) => {
+    const href = $(a).attr('href') || '';
+    const text = $(a).text().trim();
 
-  // accept both "entries/..." and "/entries/..."
-  if ((href.startsWith('/entries/') || href.startsWith('entries/')) && text) {
-    const absolute = new URL(href, 'https://plato.stanford.edu').toString();
-    entries.push({ title: text, url: absolute });
-  }
-});
+    // accept both "entries/..." and "/entries/..."
+    if ((href.startsWith('/entries/') || href.startsWith('entries/')) && text) {
+      const absolute = new URL(href, 'https://plato.stanford.edu').toString();
+      entries.push({ title: text, url: absolute });
+    }
+  });
 
   const seen = new Set();
   return entries.filter(e => {
@@ -333,7 +333,7 @@ async function sepFetchArticleCard(entryUrl) {
     url: entryUrl,
     type: 'Philosophy',
     readTime: Math.max(3, Math.ceil((extract.split(' ').length || 400) / 200)),
-    category: 'early-modern', // or whatever you prefer as a default
+    category: 'early-modern',
     source: 'Stanford Encyclopedia'
   };
 }
@@ -341,15 +341,12 @@ async function sepFetchArticleCard(entryUrl) {
 // --- Stanford Encyclopedia (random, not topic-filtered) ---
 async function fetchStanfordArticles(count = 3) {
   try {
-    // Get the master list of entries from contents.html
     const all = await sepListAllEntries();
-
     if (!all.length) {
       console.warn('[SEP] No entries found on contents page');
       return [];
     }
 
-    // Randomly sample `count` entries from the list
     const pool = all.slice();
     const chosen = [];
     for (let i = 0; i < Math.min(count, pool.length); i++) {
@@ -357,7 +354,6 @@ async function fetchStanfordArticles(count = 3) {
       chosen.push(pool.splice(idx, 1)[0]);
     }
 
-    // Fetch article cards for the chosen entries with concurrency limit
     const cards = await mapWithLimit(chosen, 3, async (entry) => {
       try {
         return await sepFetchArticleCard(entry.url);
@@ -421,30 +417,21 @@ function categorizeByTopic(topic) {
 }
 
 // --- Main collector ---
-// --- Main collector ---
-// --- Main collector ---
 async function fetchAllArticles(topicKey) {
-  // If no topicKey: pull from *all* WIKI_CATEGORY_TOPICS, not random
   const label = topicKey ? `(topic=${topicKey})` : '(all wiki topics)';
   console.log('Fetching fresh articles...', label);
 
   let wikiPromise;
-
   if (!topicKey) {
-    // union of all WIKI_CATEGORY_TOPICS
     const topicKeys = Object.keys(WIKI_CATEGORY_TOPICS);
-    // how many wiki cards per topic; tweak if you like
     const PER_TOPIC = 3;
-
     wikiPromise = Promise.all(
       topicKeys.map(k => fetchWikipediaByTopic(k, PER_TOPIC))
     ).then(arrays => arrays.flat());
   } else {
-    // single-topic feed (American lit, Italian Renaissance, etc.)
     wikiPromise = fetchWikipediaByTopic(topicKey, 6);
   }
 
-  // ⬇️ Note: Britannica removed here
   const [wikiArticles, stanfordArticles, smithsonianArticles] = await Promise.all([
     wikiPromise,
     fetchStanfordArticles(3),
@@ -454,14 +441,6 @@ async function fetchAllArticles(topicKey) {
   return [
     ...wikiArticles,
     ...stanfordArticles,
-    ...smithsonianArticles
-  ];
-}
-
-  return [
-    ...wikiArticles,
-    ...stanfordArticles,
-    ...britannicaArticles,
     ...smithsonianArticles
   ];
 }
