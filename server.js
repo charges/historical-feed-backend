@@ -374,35 +374,6 @@ async function fetchStanfordArticles(count = 3) {
   }
 }
 
-// --- Britannica (curated) ---
-async function fetchBritannicaArticles(count = 2) {
-  const curatedArticles = [
-    {
-      id: 'brit-renaissance',
-      title: 'The Renaissance',
-      extract: 'The Renaissance, spanning the 14th to 17th centuries, marked a cultural rebirth in Europe characterized by renewed interest in classical learning and humanism.',
-      thumbnail: 'https://images.unsplash.com/photo-1549834125-82d3c48159a3?w=400&h=300&fit=crop',
-      url: 'https://www.britannica.com/event/Renaissance',
-      type: 'Cultural History',
-      readTime: 7,
-      category: 'early-modern',
-      source: 'Britannica'
-    },
-    {
-      id: 'brit-mesopotamia',
-      title: 'Mesopotamian Civilization',
-      extract: 'Mesopotamia is often called the cradle of civilization...',
-      thumbnail: 'https://images.unsplash.com/photo-1580674285054-bed31e145f59?w=400&h=300&fit=crop',
-      url: 'https://www.britannica.com/place/Mesopotamia-historical-region-Asia',
-      type: 'Ancient Civilization',
-      readTime: 6,
-      category: 'ancient',
-      source: 'Britannica'
-    }
-  ];
-  return curatedArticles.slice(0, count);
-}
-
 // --- Smithsonian (curated) ---
 async function fetchSmithsonianArticles(count = 2) {
   const curatedArticles = [
@@ -451,6 +422,7 @@ function categorizeByTopic(topic) {
 
 // --- Main collector ---
 // --- Main collector ---
+// --- Main collector ---
 async function fetchAllArticles(topicKey) {
   // If no topicKey: pull from *all* WIKI_CATEGORY_TOPICS, not random
   const label = topicKey ? `(topic=${topicKey})` : '(all wiki topics)';
@@ -472,13 +444,19 @@ async function fetchAllArticles(topicKey) {
     wikiPromise = fetchWikipediaByTopic(topicKey, 6);
   }
 
-  const [wikiArticles, stanfordArticles, britannicaArticles, smithsonianArticles] =
-    await Promise.all([
-      wikiPromise,
-      fetchStanfordArticles(3),
-      fetchBritannicaArticles(2),
-      fetchSmithsonianArticles(2)
-    ]);
+  // ⬇️ Note: Britannica removed here
+  const [wikiArticles, stanfordArticles, smithsonianArticles] = await Promise.all([
+    wikiPromise,
+    fetchStanfordArticles(3),
+    fetchSmithsonianArticles(2)
+  ]);
+
+  return [
+    ...wikiArticles,
+    ...stanfordArticles,
+    ...smithsonianArticles
+  ];
+}
 
   return [
     ...wikiArticles,
