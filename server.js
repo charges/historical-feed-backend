@@ -374,16 +374,23 @@ async function fetchStanfordArticles(count = 3) {
 
 // Scrape the main Smithsonian History page for article cards
 async function smithsonianListHistoryArticles() {
-  const url = 'https://www.smithsonianmag.com/history/';
+  // Use the canonical category URL (this is what the site redirects to)
+  const url = 'https://www.smithsonianmag.com/category/history/';
   const resp = await axios.get(url, {
     timeout: 10000,
-    headers: { 'User-Agent': 'HumanitiesFeed/1.0 (contact: you@example.com)' }
+    headers: {
+      // Pretend to be a regular browser; some sites are picky
+      'User-Agent':
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) ' +
+        'AppleWebKit/537.36 (KHTML, like Gecko) ' +
+        'Chrome/120.0.0.0 Safari/537.36'
+    }
   });
 
   const $ = cheerio.load(resp.data);
   const items = [];
 
-  // Heuristic: most article titles in the History feed live in <h3><a>...</a></h3>
+  // Article titles on the History feed are rendered as <h3><a>Title</a></h3>
   $('h3 a').each((_, el) => {
     const title = $(el).text().trim();
     let href = $(el).attr('href') || '';
@@ -392,10 +399,10 @@ async function smithsonianListHistoryArticles() {
     // Make URL absolute
     const fullUrl = new URL(href, url).toString();
 
-    // Try to grab a short summary, usually the <p> right after the heading
+    // Try to grab a short summary, usually the text near the heading
     let summary =
-      $(el).closest('h3').next('p').text().trim() ||
-      $(el).parent().next('p').text().trim();
+      $(el).closest('h3').next().text().trim() || // next sibling text (often a <p>)
+      $(el).parent().next().text().trim();
 
     items.push({
       title,
@@ -404,7 +411,7 @@ async function smithsonianListHistoryArticles() {
     });
   });
 
-  // De-duplicate by URL just in case
+  // De-duplicate by URL
   const seen = new Set();
   return items.filter(item => {
     if (seen.has(item.url)) return false;
@@ -543,6 +550,7 @@ app.get('/debug/smithsonian', async (req, res) => {
     res.status(500).json({ error: err.message || String(err) });
   }
 });
+
 
 // --- health & root ---
 app.get('/health', (req, res) => {
