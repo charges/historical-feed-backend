@@ -522,12 +522,24 @@ app.get('/api/articles', async (req, res) => {
   }
 });
 
+// --- Debugger for Stanford Content ---
 app.get('/debug/stanford', async (req, res) => {
   try {
     const cards = await fetchStanfordArticles(3);
     res.json({ count: cards.length, cards });
   } catch (err) {
     console.error('[DEBUG /debug/stanford] error:', err);
+    res.status(500).json({ error: err.message || String(err) });
+  }
+});
+
+// --- Debugger for Smithsonian Content ---
+app.get('/debug/smithsonian', async (req, res) => {
+  try {
+    const cards = await fetchSmithsonianArticles(5);
+    res.json({ count: cards.length, cards });
+  } catch (err) {
+    console.error('[DEBUG /debug/smithsonian] error:', err);
     res.status(500).json({ error: err.message || String(err) });
   }
 });
