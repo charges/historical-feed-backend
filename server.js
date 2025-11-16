@@ -370,33 +370,83 @@ async function fetchStanfordArticles(count = 3) {
   }
 }
 
-// --- Smithsonian (curated) ---
+// --- Smithsonian (dynamic from History index) ---
+
+// Scrape the main Smithsonian History page for article cards
+async function smithsonianListHistoryArticles() {
+  const url = 'https://www.smithsonianmag.com/history/';
+  const resp = await axios.get(url, {
+    timeout: 10000,
+    headers: { 'User-Agent': 'HumanitiesFeed/1.0 (contact: you@example.com)' }
+  });
+
+  const $ = cheerio.load(resp.data);
+  const items = [];
+
+  // Heuristic: most article titles in the History feed live in <h3><a>...</a></h3>
+  $('h3 a').each((_, el) => {
+    const title = $(el).text().trim();
+    let href = $(el).attr('href') || '';
+    if (!title || !href) return;
+
+    // Make URL absolute
+    const fullUrl = new URL(href, url).toString();
+
+    // Try to grab a short summary, usually the <p> right after the heading
+    let summary =
+      $(el).closest('h3').next('p').text().trim() ||
+      $(el).parent().next('p').text().trim();
+
+    items.push({
+      title,
+      url: fullUrl,
+      summary
+    });
+  });
+
+  // De-duplicate by URL just in case
+  const seen = new Set();
+  return items.filter(item => {
+    if (seen.has(item.url)) return false;
+    seen.add(item.url);
+    return true;
+  });
+}
+
 async function fetchSmithsonianArticles(count = 2) {
-  const curatedArticles = [
-    {
-      id: 'smith-tut',
-      title: 'The Discovery of King Tut\'s Tomb',
-      extract: 'In 1922, Howard Carter found the nearly intact tomb of Pharaoh Tutankhamun...',
-      thumbnail: 'https://images.unsplash.com/photo-1539768942893-daf53e448371?w=400&h=300&fit=crop',
-      url: 'https://www.smithsonianmag.com/history/archaeology/',
-      type: 'Archaeology',
-      readTime: 6,
-      category: 'ancient',
-      source: 'Smithsonian'
-    },
-    {
-      id: 'smith-vikings',
-      title: 'The Vikings in North America',
-      extract: 'Evidence confirms Norse Vikings reached North America around 1000 CE...',
-      thumbnail: 'https://images.unsplash.com/photo-1583952734649-db24dc49ae80?w=400&h=300&fit=crop',
-      url: 'https://www.smithsonianmag.com/history/vikings/',
-      type: 'Exploration',
-      readTime: 5,
-      category: 'medieval',
-      source: 'Smithsonian'
+  try {
+    const all = await smithsonianListHistoryArticles();
+
+    if (!all.length) {
+      console.warn('[Smithsonian] No articles parsed from History index');
+      return [];
     }
-  ];
-  return curatedArticles.slice(0, count);
+
+    // Randomly sample `count` articles from the list
+    const pool = all.slice();
+    const chosen = [];
+    for (let i = 0; i < Math.min(count, pool.length); i++) {
+      const idx = Math.floor(Math.random() * pool.length);
+      chosen.push(pool.splice(idx, 1)[0]);
+    }
+
+    return chosen.map((item, idx) => ({
+      id: `smith-${idx}-${encodeURIComponent(item.url)}`,
+      title: item.title,
+      extract:
+        item.summary ||
+        'From Smithsonian magazine’s History section.',
+      thumbnail: null, // front-end already hides images for non-Wikipedia
+      url: item.url,
+      type: 'History',
+      readTime: 6,
+      category: 'modern',
+      source: 'Smithsonian'
+    }));
+  } catch (err) {
+    console.error('[Smithsonian] Fetch error:', err.message || err);
+    return [];
+  }
 }
 
 // --- Categorization helpers ---
