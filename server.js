@@ -442,7 +442,7 @@ async function fetchSmithsonianArticles(count = 2) {
     const all = await smithsonianListHistoryArticles();
 
     if (!all.length) {
-      console.warn('[Smithsonian] No articles parsed from History index');
+      console.warn('[Smithsonian] No articles parsed from category pages');
       return [];
     }
 
@@ -454,19 +454,48 @@ async function fetchSmithsonianArticles(count = 2) {
       chosen.push(pool.splice(idx, 1)[0]);
     }
 
-    return chosen.map((item, idx) => ({
-      id: `smith-${idx}-${encodeURIComponent(item.url)}`,
-      title: item.title,
-      extract:
-        item.summary ||
-        'From Smithsonian magazine’s History section.',
-      thumbnail: null, // front-end already hides images for non-Wikipedia
-      url: item.url,
-      type: 'History',
-      readTime: 6,
-      category: 'modern',
-      source: 'Smithsonian'
-    }));
+    // For each chosen article, try to fetch a thumbnail from the article page
+    const cards = await mapWithLimit(chosen, 3, async (item, idx) => {
+      let thumb = null;
+
+      try {
+        const resp = await axios.get(item.url, {
+          timeout: 10000,
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (compatible; HumanitiesFeedBot/1.0; +https://example.com/bot-info)'
+          }
+        });
+        const $ = cheerio.load(resp.data);
+
+        // Priority: og:image → twitter:image → first <article> <img>
+        thumb =
+          $('meta[property="og:image"]').attr('content') ||
+          $('meta[name="twitter:image"]').attr('content') ||
+          $('article img').first().attr('src');
+
+        if (thumb) {
+          thumb = new URL(thumb, item.url).toString();
+        }
+      } catch (err) {
+        console.error('[Smithsonian] thumbnail fetch error for', item.url, '-', err.message || err);
+      }
+
+      return {
+        id: `smith-${idx}-${encodeURIComponent(item.url)}`,
+        title: item.title,
+        extract:
+          item.summary ||
+          'From Smithsonian magazine’s history and culture sections.',
+        thumbnail: thumb || null,
+        url: item.url,
+        type: 'History',
+        readTime: 6,
+        category: 'modern',
+        source: 'Smithsonian'
+      };
+    });
+
+    return cards.filter(Boolean);
   } catch (err) {
     console.error('[Smithsonian] Fetch error:', err.message || err);
     return [];
