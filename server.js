@@ -370,7 +370,7 @@ async function fetchStanfordArticles(count = 3) {
   }
 }
 
-// --- Smithsonian (dynamic, multiple history-related categories) ---
+// --- Smithsonian (dynamic, multiple category index pages) ---
 
 const SMITHSONIAN_CATEGORY_URLS = [
   'https://www.smithsonianmag.com/category/archaeology/',
@@ -380,7 +380,6 @@ const SMITHSONIAN_CATEGORY_URLS = [
   'https://www.smithsonianmag.com/category/history/'
 ];
 
-// Scrape all Smithsonian history-related category pages for article cards
 async function smithsonianListHistoryArticles() {
   const results = [];
 
@@ -401,43 +400,25 @@ async function smithsonianListHistoryArticles() {
       const $ = cheerio.load(resp.data);
       const itemsForUrl = [];
 
-      // Article cards appear with headings like <h3><a>Title</a></h3>
-      $('h3 a').each((_, el) => {
+      $('h2 a, h3 a').each((_, el) => {
         const title = $(el).text().trim();
         let href = $(el).attr('href') || '';
         if (!title || !href) return;
 
         const fullUrl = new URL(href, url).toString();
 
-        // First paragraph after this heading as a summary, if present
+        // Skip links to categories/tags
+        if (fullUrl.includes('/category/') || fullUrl.includes('/tag/')) return;
+
         const summary =
-          $(el).closest('h3').nextUntil('h3', 'p').first().text().trim() ||
-          '';
-
-        // Try to locate a nearby image (usually a preceding <a><img/></a>)
-        let imgSrc = null;
-        const imgCandidate = $(el)
-          .closest('h3')
-          .prevAll('a')
-          .has('img')
-          .first()
-          .find('img');
-
-        if (imgCandidate.length) {
-          imgSrc =
-            imgCandidate.attr('data-src') ||
-            imgCandidate.attr('src') ||
-            null;
-          if (imgSrc) {
-            imgSrc = new URL(imgSrc, url).toString();
-          }
-        }
+          $(el).closest('h2, h3').next('p').text().trim() ||
+          $(el).parent().next('p').text().trim();
 
         itemsForUrl.push({
           title,
           url: fullUrl,
           summary,
-          thumbnail: imgSrc || null
+          thumbnail: null
         });
       });
 
@@ -454,7 +435,6 @@ async function smithsonianListHistoryArticles() {
     }
   }
 
-  // De-duplicate by URL
   const seen = new Set();
   const deduped = results.filter(item => {
     if (seen.has(item.url)) return false;
@@ -475,7 +455,6 @@ async function fetchSmithsonianArticles(count = 2) {
       return [];
     }
 
-    // Randomly sample `count` articles
     const pool = all.slice();
     const chosen = [];
     for (let i = 0; i < Math.min(count, pool.length); i++) {
@@ -489,7 +468,7 @@ async function fetchSmithsonianArticles(count = 2) {
       extract:
         item.summary ||
         'From Smithsonian magazine’s history and culture sections.',
-      thumbnail: item.thumbnail || null,
+      thumbnail: null,
       url: item.url,
       type: 'History',
       readTime: 6,
