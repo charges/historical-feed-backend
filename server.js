@@ -377,64 +377,75 @@ const SMITHSONIAN_CATEGORY_URLS = [
   'https://www.smithsonianmag.com/category/arts-culture/'
 ];
 
-// --- Smithsonian (dynamic from multiple category index pages) ---
+// Scrape the Smithsonian History category page for article cards
 async function smithsonianListHistoryArticles() {
+  // Use the category URL (history index)
+  const url = 'https://www.smithsonianmag.com/category/history/';
+
+  const resp = await axios.get(url, {
+    timeout: 10000,
+    headers: {
+      // Pretend to be a normal browser so we don't get a bare/JS-only page
+      'User-Agent':
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
+        '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+      'Accept':
+        'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+      'Accept-Language': 'en-US,en;q=0.9'
+    }
+  });
+
+  const $ = cheerio.load(resp.data);
   const items = [];
 
-  for (const url of SMITHSONIAN_CATEGORY_URLS) {
-    let resp;
-    try {
-      resp = await axios.get(url, {
-        timeout: 10000,
-        headers: {
-          // Slightly more browser-like UA; some CDNs care
-          'User-Agent': 'Mozilla/5.0 (compatible; HumanitiesFeedBot/1.0; +https://example.com/bot-info)'
-        }
-      });
-    } catch (err) {
-      console.error('[Smithsonian] HTTP error for', url, '-', err.message || err);
-      continue;
+  // Each history story appears as a "### <a>Title</a>" in an <h3>
+  $('h3 a').each((_, el) => {
+    const title = $(el).text().trim();
+    let href = $(el).attr('href') || '';
+    if (!title || !href) return;
+
+    // Normalize to absolute URL
+    const fullUrl = new URL(href, url).toString();
+
+    // Grab the first paragraph after this heading as a summary, if present
+    const summary =
+      $(el).closest('h3').nextUntil('h3', 'p').first().text().trim() ||
+      '';
+
+    // Try to find a nearby image: usually a preceding <a><img/></a>
+    let imgSrc = null;
+    const imgCandidate = $(el)
+      .closest('h3')
+      .prevAll('a')
+      .has('img')
+      .first()
+      .find('img');
+
+    if (imgCandidate.length) {
+      imgSrc =
+        imgCandidate.attr('data-src') ||
+        imgCandidate.attr('src') ||
+        null;
+      if (imgSrc) {
+        imgSrc = new URL(imgSrc, url).toString();
+      }
     }
 
-    const html = resp.data || '';
-    const $ = cheerio.load(html);
-
-    // On category pages, article links are generally in <h2><a> or <h3><a>
-    $('h2 a, h3 a').each((_, el) => {
-      const title = $(el).text().trim();
-      let href = $(el).attr('href') || '';
-      if (!title || !href) return;
-
-      // Make URL absolute
-      const fullUrl = new URL(href, url).toString();
-
-      // Skip other category/tag/nav links; keep "real" article URLs
-      if (fullUrl.includes('/category/') || fullUrl.includes('/tag/')) return;
-
-      // Grab a short blurb: usually the <p> right after the card heading
-      const summary =
-        $(el).closest('h2, h3').next('p').text().trim() ||
-        $(el).parent().next('p').text().trim();
-
-      items.push({
-        title,
-        url: fullUrl,
-        summary
-      });
+    items.push({
+      title,
+      url: fullUrl,
+      summary,
+      thumbnail: imgSrc || null
     });
-  }
+  });
 
   // De-duplicate by URL
   const seen = new Set();
-  const unique = items.filter(item => {
+  return items.filter(item => {
     if (seen.has(item.url)) return false;
     seen.add(item.url);
     return true;
   });
-
-  console.log(`[Smithsonian] Parsed ${unique.length} items from ${SMITHSONIAN_CATEGORY_URLS.length} category pages`);
-
-  return unique;
 }
 
 async function fetchSmithsonianArticles(count = 2) {
