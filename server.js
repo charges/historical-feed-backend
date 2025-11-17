@@ -377,71 +377,80 @@ const SMITHSONIAN_CATEGORY_URLS = [
   'https://www.smithsonianmag.com/category/arts-culture/'
 ];
 
-// Scrape the Smithsonian History category page for article cards
+// Scrape multiple Smithsonian category pages for article cards
 async function smithsonianListHistoryArticles() {
-  // Use the category URL (history index)
-  const url = 'https://www.smithsonianmag.com/category/history/';
+  const headers = {
+    'User-Agent':
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
+      '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+    'Accept':
+      'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+    'Accept-Language': 'en-US,en;q=0.9'
+  };
 
-  const resp = await axios.get(url, {
-    timeout: 10000,
-    headers: {
-      // Pretend to be a normal browser so we don't get a bare/JS-only page
-      'User-Agent':
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
-        '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-      'Accept':
-        'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-      'Accept-Language': 'en-US,en;q=0.9'
+  const allItems = [];
+
+  // Loop over the category URLs you confirmed work
+  for (const url of SMITHSONIAN_CATEGORY_URLS) {
+    try {
+      const resp = await axios.get(url, {
+        timeout: 10000,
+        headers
+      });
+
+      const $ = cheerio.load(resp.data);
+
+      $('h3 a').each((_, el) => {
+        const title = $(el).text().trim();
+        let href = $(el).attr('href') || '';
+        if (!title || !href) return;
+
+        // Normalize to absolute URL
+        const fullUrl = new URL(href, url).toString();
+
+        // First paragraph after this heading as a summary, if present
+        const summary =
+          $(el).closest('h3').nextUntil('h3', 'p').first().text().trim() ||
+          '';
+
+        // Try to find a nearby image: usually a preceding <a><img/></a>
+        let imgSrc = null;
+        const imgCandidate = $(el)
+          .closest('h3')
+          .prevAll('a')
+          .has('img')
+          .first()
+          .find('img');
+
+        if (imgCandidate.length) {
+          imgSrc =
+            imgCandidate.attr('data-src') ||
+            imgCandidate.attr('src') ||
+            null;
+          if (imgSrc) {
+            imgSrc = new URL(imgSrc, url).toString();
+          }
+        }
+
+        allItems.push({
+          title,
+          url: fullUrl,
+          summary,
+          thumbnail: imgSrc || null
+        });
+      });
+    } catch (err) {
+      console.error(
+        '[Smithsonian] category fetch error for',
+        url,
+        err.message || err
+      );
     }
-  });
-
-  const $ = cheerio.load(resp.data);
-  const items = [];
-
-  // Each history story appears as a "### <a>Title</a>" in an <h3>
-  $('h3 a').each((_, el) => {
-    const title = $(el).text().trim();
-    let href = $(el).attr('href') || '';
-    if (!title || !href) return;
-
-    // Normalize to absolute URL
-    const fullUrl = new URL(href, url).toString();
-
-    // Grab the first paragraph after this heading as a summary, if present
-    const summary =
-      $(el).closest('h3').nextUntil('h3', 'p').first().text().trim() ||
-      '';
-
-    // Try to find a nearby image: usually a preceding <a><img/></a>
-    let imgSrc = null;
-    const imgCandidate = $(el)
-      .closest('h3')
-      .prevAll('a')
-      .has('img')
-      .first()
-      .find('img');
-
-    if (imgCandidate.length) {
-      imgSrc =
-        imgCandidate.attr('data-src') ||
-        imgCandidate.attr('src') ||
-        null;
-      if (imgSrc) {
-        imgSrc = new URL(imgSrc, url).toString();
-      }
-    }
-
-    items.push({
-      title,
-      url: fullUrl,
-      summary,
-      thumbnail: imgSrc || null
-    });
-  });
+  }
 
   // De-duplicate by URL
   const seen = new Set();
-  return items.filter(item => {
+  return allItems.filter(item => {
     if (seen.has(item.url)) return false;
     seen.add(item.url);
     return true;
@@ -478,13 +487,6 @@ async function fetchSmithsonianArticles(count = 2) {
       category: 'modern',
       source: 'Smithsonian'
     }));
-  } catch (err) {
-    console.error('[Smithsonian] Fetch error:', err.message || err);
-    return [];
-  }
-}
-
-    return cards.filter(Boolean);
   } catch (err) {
     console.error('[Smithsonian] Fetch error:', err.message || err);
     return [];
