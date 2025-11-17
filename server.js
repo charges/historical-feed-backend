@@ -371,6 +371,7 @@ async function fetchStanfordArticles(count = 3) {
 }
 
 const SMITHSONIAN_CATEGORY_URLS = [
+  'https://www.smithsonianmag.com/history/',
   'https://www.smithsonianmag.com/category/archaeology/',
   'https://www.smithsonianmag.com/category/us-history/',
   'https://www.smithsonianmag.com/category/world-history/',
@@ -390,7 +391,6 @@ async function smithsonianListHistoryArticles() {
 
   const allItems = [];
 
-  // Loop over the category URLs you confirmed work
   for (const url of SMITHSONIAN_CATEGORY_URLS) {
     try {
       const resp = await axios.get(url, {
@@ -400,24 +400,33 @@ async function smithsonianListHistoryArticles() {
 
       const $ = cheerio.load(resp.data);
 
-      $('h3 a').each((_, el) => {
+      const localItems = [];
+
+      // Try a few common headline patterns
+      const candidateLinks = $(
+        'h3 a, h2 a, .summary-item__hed a, .summary-item__hed-link'
+      );
+
+      candidateLinks.each((_, el) => {
         const title = $(el).text().trim();
         let href = $(el).attr('href') || '';
         if (!title || !href) return;
 
-        // Normalize to absolute URL
         const fullUrl = new URL(href, url).toString();
 
-        // First paragraph after this heading as a summary, if present
+        // Summary: first paragraph after the heading/container
         const summary =
-          $(el).closest('h3').nextUntil('h3', 'p').first().text().trim() ||
-          '';
+          $(el).closest('h3, h2, .summary-item__content')
+            .nextUntil('h3, h2, .summary-item__content', 'p')
+            .first()
+            .text()
+            .trim() || '';
 
-        // Try to find a nearby image: usually a preceding <a><img/></a>
+        // Try to find a nearby image
         let imgSrc = null;
         const imgCandidate = $(el)
-          .closest('h3')
-          .prevAll('a')
+          .closest('h3, h2, .summary-item__content')
+          .prevAll('a, figure')
           .has('img')
           .first()
           .find('img');
@@ -425,20 +434,30 @@ async function smithsonianListHistoryArticles() {
         if (imgCandidate.length) {
           imgSrc =
             imgCandidate.attr('data-src') ||
+            imgCandidate.attr('data-srcset') ||
             imgCandidate.attr('src') ||
             null;
           if (imgSrc) {
-            imgSrc = new URL(imgSrc, url).toString();
+            imgSrc = new URL(imgSrc.split(' ')[0], url).toString();
           }
         }
 
-        allItems.push({
+        localItems.push({
           title,
           url: fullUrl,
           summary,
           thumbnail: imgSrc || null
         });
       });
+
+      console.log(
+        '[Smithsonian] Parsed',
+        localItems.length,
+        'items from',
+        url
+      );
+
+      allItems.push(...localItems);
     } catch (err) {
       console.error(
         '[Smithsonian] category fetch error for',
