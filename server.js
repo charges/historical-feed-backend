@@ -380,8 +380,12 @@ const SMITHSONIAN_CATEGORY_URLS = [
   'https://www.smithsonianmag.com/category/history/'
 ];
 
+// this will store per-URL debug info for the last run
+let smithsonianDebug = [];
+
 async function smithsonianListHistoryArticles() {
   const results = [];
+  smithsonianDebug = [];  // reset debug info each time
 
   for (const url of SMITHSONIAN_CATEGORY_URLS) {
     try {
@@ -397,9 +401,12 @@ async function smithsonianListHistoryArticles() {
         }
       });
 
-      const $ = cheerio.load(resp.data);
+      const html = resp.data || '';
+      const $ = cheerio.load(html);
+
       const itemsForUrl = [];
 
+      // On category pages, the main story list is usually in h2/h3 anchors
       $('h2 a, h3 a').each((_, el) => {
         const title = $(el).text().trim();
         let href = $(el).attr('href') || '';
@@ -407,7 +414,7 @@ async function smithsonianListHistoryArticles() {
 
         const fullUrl = new URL(href, url).toString();
 
-        // Skip links to categories/tags
+        // Skip links that are clearly to other category/tag pages
         if (fullUrl.includes('/category/') || fullUrl.includes('/tag/')) return;
 
         const summary =
@@ -422,19 +429,32 @@ async function smithsonianListHistoryArticles() {
         });
       });
 
+      // record what happened for this URL
+      smithsonianDebug.push({
+        url,
+        ok: true,
+        status: resp.status,
+        length: html.length,
+        itemsFound: itemsForUrl.length
+      });
+
       console.log(
-        `[Smithsonian] Parsed ${itemsForUrl.length} items from ${url}`
+        `[Smithsonian] ${url} -> status ${resp.status}, itemsFound=${itemsForUrl.length}`
       );
 
       results.push(...itemsForUrl);
     } catch (err) {
-      console.error(
-        `[Smithsonian] Error fetching ${url}:`,
-        err.message || err
-      );
+      const msg = err.message || String(err);
+      smithsonianDebug.push({
+        url,
+        ok: false,
+        error: msg
+      });
+      console.error(`[Smithsonian] Error fetching ${url}:`, msg);
     }
   }
 
+  // De-duplicate by URL
   const seen = new Set();
   const deduped = results.filter(item => {
     if (seen.has(item.url)) return false;
@@ -442,7 +462,10 @@ async function smithsonianListHistoryArticles() {
     return true;
   });
 
-  console.log(`[Smithsonian] Total parsed items across categories: ${deduped.length}`);
+  console.log(
+    `[Smithsonian] Total parsed items across categories: ${deduped.length}`
+  );
+
   return deduped;
 }
 
@@ -468,7 +491,7 @@ async function fetchSmithsonianArticles(count = 2) {
       extract:
         item.summary ||
         'From Smithsonian magazine’s history and culture sections.',
-      thumbnail: null,
+      thumbnail: null, // we can wire images later once basic parsing works
       url: item.url,
       type: 'History',
       readTime: 6,
@@ -573,6 +596,7 @@ app.get('/debug/smithsonian', async (req, res) => {
     res.json({
       rawCount: raw.length,
       cardCount: cards.length,
+      perUrl: smithsonianDebug,       // <-- NEW: per-URL diagnostics
       rawSample: raw.slice(0, 5),
       cards
     });
