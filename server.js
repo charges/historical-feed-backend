@@ -15,11 +15,54 @@ const WIKI_TOPICS = {
     'deepcat:"American poets"',
     'deepcat:"American short story writers"'
   ],
+
   "italian-renaissance": [
     'deepcat:"Italian Renaissance"',
     'deepcat:"Renaissance in Italy"',
     'deepcat:"Italian Renaissance painters"',
     'deepcat:"Italian Renaissance architecture"'
+  ],
+
+  // NEW TOPICS
+  "italian-history": [
+    'deepcat:"History of Italy"',
+    'deepcat:"Italian unification"',
+    'deepcat:"Kingdom of Italy"',
+    'deepcat:"Italian Republic"'
+  ],
+
+  "us-history": [
+    'deepcat:"History of the United States"',
+    'deepcat:"American Revolution"',
+    'deepcat:"American Civil War"',
+    'deepcat:"United States history by period"'
+  ],
+
+  "modern-german-literature": [
+    'deepcat:"German literature"',
+    'deepcat:"20th-century German literature"',
+    'deepcat:"21st-century German literature"',
+    'deepcat:"German novelists"'
+  ],
+
+  "modern-austrian-literature": [
+    'deepcat:"Austrian literature"',
+    'deepcat:"20th-century Austrian literature"',
+    'deepcat:"21st-century Austrian literature"'
+  ],
+
+  "modern-swiss-literature": [
+    'deepcat:"Swiss literature"',
+    'deepcat:"Swiss novelists"',
+    'deepcat:"Swiss writers"',
+    'deepcat:"20th-century Swiss literature"'
+  ],
+
+  "italian-literature": [
+    'deepcat:"Italian literature"',
+    'deepcat:"Italian novelists"',
+    'deepcat:"Italian poets"',
+    'deepcat:"20th-century Italian literature"'
   ],
 };
 
@@ -35,6 +78,43 @@ const WIKI_CATEGORY_TOPICS = {
     "Category:Italian Renaissance",
     "Category:Italian Renaissance painters",
     "Category:Italian Renaissance architecture"
+  ],
+
+  // NEW TOPICS
+  "italian-history": [
+    "Category:History of Italy",
+    "Category:Italian unification",
+    "Category:Italian states"
+  ],
+
+  "us-history": [
+    "Category:History of the United States",
+    "Category:United States history by period",
+    "Category:Political history of the United States"
+  ],
+
+  "modern-german-literature": [
+    "Category:German literature",
+    "Category:20th-century German literature",
+    "Category:21st-century German literature"
+  ],
+
+  "modern-austrian-literature": [
+    "Category:Austrian literature",
+    "Category:20th-century Austrian literature",
+    "Category:21st-century Austrian literature"
+  ],
+
+  "modern-swiss-literature": [
+    "Category:Swiss literature",
+    "Category:Swiss writers",
+    "Category:Swiss novelists"
+  ],
+
+  "italian-literature": [
+    "Category:Italian literature",
+    "Category:Italian novelists",
+    "Category:Italian poets"
   ]
 };
 
