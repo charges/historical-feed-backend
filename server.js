@@ -7,7 +7,11 @@ const axiosRetry = require('axios-retry');
 
 const app = express();
 
-// --- Wikipedia topic presets (search-based deepcat fallback) ---
+/**
+ * =========================
+ * Wikipedia topic presets
+ * =========================
+ */
 const WIKI_TOPICS = {
   "american-literature": [
     'deepcat:"American literature"',
@@ -66,7 +70,6 @@ const WIKI_TOPICS = {
   ],
 };
 
-// --- Category-first topic map (preferred) ---
 const WIKI_CATEGORY_TOPICS = {
   "american-literature": [
     "Category:American literature",
@@ -118,7 +121,11 @@ const WIKI_CATEGORY_TOPICS = {
   ]
 };
 
-// --- Crash logging ---
+/**
+ * =========================
+ * Crash logging
+ * =========================
+ */
 process.on('uncaughtException', (err) => {
   console.error('[FATAL] Uncaught exception:', err);
 });
@@ -128,13 +135,17 @@ process.on('unhandledRejection', (reason, p) => {
 
 const PORT = process.env.PORT || 3000;
 
-// --- Axios retry/backoff (global) ---
+/**
+ * =========================
+ * Axios retry/backoff
+ * =========================
+ */
 axiosRetry(axios, {
   retries: 3,
   retryDelay: (retryCount, error) => {
     const retryAfter = Number(error?.response?.headers?.['retry-after']);
     if (!Number.isNaN(retryAfter)) return retryAfter * 1000;
-    return Math.min(1000 * 2 ** (retryCount - 1), 8000); // 1s,2s,4s, capped 8s
+    return Math.min(1000 * 2 ** (retryCount - 1), 8000); // 1s,2s,4s, cap 8s
   },
   retryCondition: (error) => {
     if (error.code === 'ECONNABORTED') return true;
@@ -143,16 +154,28 @@ axiosRetry(axios, {
   },
 });
 
-// --- Middleware ---
+/**
+ * =========================
+ * Middleware
+ * =========================
+ */
 app.use(cors()); // consider: cors({ origin: ['https://charges.github.io', 'http://localhost:8080'] })
 app.use(express.json());
 
-// --- In-memory cache (1 hour) ---
+/**
+ * =========================
+ * In-memory cache
+ * =========================
+ */
 let articleCache = [];
 let lastRefresh = 0;
 const CACHE_DURATION = 3600000; // 1 hour
 
-// --- tiny concurrency limiter ---
+/**
+ * =========================
+ * Tiny concurrency limiter
+ * =========================
+ */
 async function mapWithLimit(items, limit, mapper) {
   const results = [];
   let i = 0;
@@ -170,7 +193,41 @@ async function mapWithLimit(items, limit, mapper) {
   return results.filter(Boolean);
 }
 
-// --- Wikipedia RANDOM fetcher (fallback) ---
+/**
+ * =========================
+ * Shakespeare (MIT) sonnets
+ * =========================
+ */
+const SONNETS_INDEX_URL = 'https://shakespeare.mit.edu/Poetry/sonnets.html';
+const SONNETS_BASE_URL  = 'https://shakespeare.mit.edu/Poetry/';
+
+function normalizeSonnetText(s) {
+  return (s || '')
+    .replace(/\r/g, '')
+    .replace(/[ \t]+\n/g, '\n')
+    .trim();
+}
+
+function extractRomanFromHref(href) {
+  const m = String(href || '').match(/^sonnet\.([IVXLCDM]+)\.html$/i);
+  return m ? m[1].toUpperCase() : null;
+}
+
+/**
+ * =========================
+ * Wikipedia fetchers
+ * =========================
+ */
+function categorizeArticle(title, text) {
+  const content = (title + ' ' + text).toLowerCase();
+  if (content.match(/ancient|egypt|greek|roman|mesopotamia|bc|bce/)) return 'ancient';
+  if (content.match(/medieval|middle ages|feudal|crusade|viking/)) return 'medieval';
+  if (content.match(/renaissance|reformation|enlightenment|1400|1500|1600|1700/)) return 'early-modern';
+  if (content.match(/industrial|revolution|1800|1900|20th century|war|modern/)) return 'modern';
+  if (content.match(/technology|invention|computer|press|printing/)) return 'technology';
+  return 'ancient';
+}
+
 async function fetchWikipediaArticles(count = 6, concurrency = 4) {
   const requests = Array.from({ length: count }, () => ({
     url: 'https://en.wikipedia.org/api/rest_v1/page/random/summary'
@@ -199,7 +256,6 @@ async function fetchWikipediaArticles(count = 6, concurrency = 4) {
   return responses;
 }
 
-// --- Wikipedia: search helper (deepcat fallback) ---
 async function wikiSearchTitles(srsearch, limit = 50) {
   const resp = await axios.get('https://en.wikipedia.org/w/api.php', {
     timeout: 8000,
@@ -218,7 +274,6 @@ async function wikiSearchTitles(srsearch, limit = 50) {
     .filter(t => !t.toLowerCase().includes('(disambiguation)'));
 }
 
-// --- Wikipedia: summaries for given titles ---
 async function wikiSummariesForTitles(titles, concurrency = 4) {
   const requests = titles.map(title => ({
     url: `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(title)}`
@@ -248,7 +303,6 @@ async function wikiSummariesForTitles(titles, concurrency = 4) {
   return results.filter(Boolean);
 }
 
-// --- Wikipedia: CategoryMembers crawl (topic-first) ---
 async function getCategoryMembers(cmtitle, cmtype = 'page|subcat', cmlimit = 200, cmcontinue) {
   const resp = await axios.get('https://en.wikipedia.org/w/api.php', {
     timeout: 10000,
@@ -258,7 +312,7 @@ async function getCategoryMembers(cmtitle, cmtype = 'page|subcat', cmlimit = 200
       list: 'categorymembers',
       cmtitle,
       cmtype,
-      cmnamespace: 0, // main/article space
+      cmnamespace: 0,
       cmlimit: Math.min(cmlimit, 500),
       continue: '',
       cmcontinue,
@@ -283,7 +337,7 @@ async function crawlCategories(seedCategories, { maxDepth = 1, maxPages = 400 } 
       const data = await getCategoryMembers(title, 'page|subcat', 200, cmcontinue);
       const members = data?.query?.categorymembers || [];
       for (const m of members) {
-        if (m.ns === 14) { // subcategory
+        if (m.ns === 14) {
           if (depth < maxDepth) {
             queue.push({ title: `Category:${m.title.replace(/^Category:/, '')}`, depth: depth + 1 });
           }
@@ -301,12 +355,11 @@ async function crawlCategories(seedCategories, { maxDepth = 1, maxPages = 400 } 
 
 async function fetchWikipediaByCategoryTopic(topicKey, count = 6) {
   const seedCats = WIKI_CATEGORY_TOPICS[topicKey];
-  if (!seedCats) return null; // let caller decide fallback
+  if (!seedCats) return null;
 
   const titles = await crawlCategories(seedCats, { maxDepth: 1, maxPages: 500 });
   if (!titles.length) return [];
 
-  // sample `count`
   const pool = titles.slice();
   const sample = [];
   for (let i = 0; i < Math.min(count, pool.length); i++) {
@@ -316,7 +369,6 @@ async function fetchWikipediaByCategoryTopic(topicKey, count = 6) {
   return wikiSummariesForTitles(sample);
 }
 
-// --- Wikipedia: topic dispatcher (category-first, deepcat fallback, then random) ---
 async function fetchWikipediaByTopic(topicKey, count = 6) {
   // Prefer category crawl
   try {
@@ -350,13 +402,15 @@ async function fetchWikipediaByTopic(topicKey, count = 6) {
     }
   }
 
-  // Last resort: random
   console.warn('No titles found for topic', topicKey, '—falling back to random');
   return fetchWikipediaArticles(count);
 }
 
-// --- SEP helpers ---
-// Crawl the main SEP contents page and return an array of { title, url }
+/**
+ * =========================
+ * SEP helpers
+ * =========================
+ */
 async function sepListAllEntries() {
   const url = 'https://plato.stanford.edu/contents.html';
   const resp = await axios.get(url, {
@@ -370,7 +424,6 @@ async function sepListAllEntries() {
     const href = $(a).attr('href') || '';
     const text = $(a).text().trim();
 
-    // accept both "entries/..." and "/entries/..."
     if ((href.startsWith('/entries/') || href.startsWith('entries/')) && text) {
       const absolute = new URL(href, 'https://plato.stanford.edu').toString();
       entries.push({ title: text, url: absolute });
@@ -385,7 +438,6 @@ async function sepListAllEntries() {
   });
 }
 
-// Fetch a single SEP article card (title/extract/url/etc.)
 async function sepFetchArticleCard(entryUrl) {
   const resp = await axios.get(entryUrl, {
     timeout: 10000,
@@ -418,7 +470,6 @@ async function sepFetchArticleCard(entryUrl) {
   };
 }
 
-// --- Stanford Encyclopedia (random, not topic-filtered) ---
 async function fetchStanfordArticles(count = 3) {
   try {
     const all = await sepListAllEntries();
@@ -450,8 +501,11 @@ async function fetchStanfordArticles(count = 3) {
   }
 }
 
-// --- Smithsonian (dynamic, multiple category index pages) ---
-
+/**
+ * =========================
+ * Smithsonian
+ * =========================
+ */
 const SMITHSONIAN_CATEGORY_URLS = [
   'https://www.smithsonianmag.com/category/archaeology/',
   'https://www.smithsonianmag.com/category/us-history/',
@@ -460,12 +514,11 @@ const SMITHSONIAN_CATEGORY_URLS = [
   'https://www.smithsonianmag.com/category/history/'
 ];
 
-// this will store per-URL debug info for the last run
 let smithsonianDebug = [];
 
 async function smithsonianListHistoryArticles() {
   const results = [];
-  smithsonianDebug = [];  // reset debug info each time
+  smithsonianDebug = [];
 
   for (const url of SMITHSONIAN_CATEGORY_URLS) {
     try {
@@ -486,15 +539,12 @@ async function smithsonianListHistoryArticles() {
 
       const itemsForUrl = [];
 
-      // On category pages, the main story list is usually in h2/h3 anchors
       $('h2 a, h3 a').each((_, el) => {
         const title = $(el).text().trim();
         let href = $(el).attr('href') || '';
         if (!title || !href) return;
 
         const fullUrl = new URL(href, url).toString();
-
-        // Skip links that are clearly to other category/tag pages
         if (fullUrl.includes('/category/') || fullUrl.includes('/tag/')) return;
 
         const summary =
@@ -509,7 +559,6 @@ async function smithsonianListHistoryArticles() {
         });
       });
 
-      // record what happened for this URL
       smithsonianDebug.push({
         url,
         ok: true,
@@ -518,23 +567,15 @@ async function smithsonianListHistoryArticles() {
         itemsFound: itemsForUrl.length
       });
 
-      console.log(
-        `[Smithsonian] ${url} -> status ${resp.status}, itemsFound=${itemsForUrl.length}`
-      );
-
+      console.log(`[Smithsonian] ${url} -> status ${resp.status}, itemsFound=${itemsForUrl.length}`);
       results.push(...itemsForUrl);
     } catch (err) {
       const msg = err.message || String(err);
-      smithsonianDebug.push({
-        url,
-        ok: false,
-        error: msg
-      });
+      smithsonianDebug.push({ url, ok: false, error: msg });
       console.error(`[Smithsonian] Error fetching ${url}:`, msg);
     }
   }
 
-  // De-duplicate by URL
   const seen = new Set();
   const deduped = results.filter(item => {
     if (seen.has(item.url)) return false;
@@ -542,17 +583,13 @@ async function smithsonianListHistoryArticles() {
     return true;
   });
 
-  console.log(
-    `[Smithsonian] Total parsed items across categories: ${deduped.length}`
-  );
-
+  console.log(`[Smithsonian] Total parsed items across categories: ${deduped.length}`);
   return deduped;
 }
 
 async function fetchSmithsonianArticles(count = 2) {
   try {
     const all = await smithsonianListHistoryArticles();
-
     if (!all.length) {
       console.warn('[Smithsonian] No articles parsed from any category');
       return [];
@@ -568,10 +605,8 @@ async function fetchSmithsonianArticles(count = 2) {
     return chosen.map((item, idx) => ({
       id: `smith-${idx}-${encodeURIComponent(item.url)}`,
       title: item.title,
-      extract:
-        item.summary ||
-        'From Smithsonian magazine’s history and culture sections.',
-      thumbnail: null, // we can wire images later once basic parsing works
+      extract: item.summary || 'From Smithsonian magazine’s history and culture sections.',
+      thumbnail: null,
       url: item.url,
       type: 'History',
       readTime: 6,
@@ -584,24 +619,11 @@ async function fetchSmithsonianArticles(count = 2) {
   }
 }
 
-// --- Categorization helpers ---
-function categorizeArticle(title, text) {
-  const content = (title + ' ' + text).toLowerCase();
-  if (content.match(/ancient|egypt|greek|roman|mesopotamia|bc|bce/)) return 'ancient';
-  if (content.match(/medieval|middle ages|feudal|crusade|viking/)) return 'medieval';
-  if (content.match(/renaissance|reformation|enlightenment|1400|1500|1600|1700/)) return 'early-modern';
-  if (content.match(/industrial|revolution|1800|1900|20th century|war|modern/)) return 'modern';
-  if (content.match(/technology|invention|computer|press|printing/)) return 'technology';
-  return 'ancient';
-}
-function categorizeByTopic(topic) {
-  if (topic.includes('ancient') || topic.includes('plato') || topic.includes('stoicism')) return 'ancient';
-  if (topic.includes('medieval')) return 'medieval';
-  if (topic.includes('enlightenment') || topic.includes('descartes')) return 'early-modern';
-  return 'ancient';
-}
-
-// --- Main collector ---
+/**
+ * =========================
+ * Main collector
+ * =========================
+ */
 async function fetchAllArticles(topicKey) {
   const label = topicKey ? `(topic=${topicKey})` : '(all wiki topics)';
   console.log('Fetching fresh articles...', label);
@@ -610,9 +632,8 @@ async function fetchAllArticles(topicKey) {
   if (!topicKey) {
     const topicKeys = Object.keys(WIKI_CATEGORY_TOPICS);
     const PER_TOPIC = 3;
-    wikiPromise = Promise.all(
-      topicKeys.map(k => fetchWikipediaByTopic(k, PER_TOPIC))
-    ).then(arrays => arrays.flat());
+    wikiPromise = Promise.all(topicKeys.map(k => fetchWikipediaByTopic(k, PER_TOPIC)))
+      .then(arrays => arrays.flat());
   } else {
     wikiPromise = fetchWikipediaByTopic(topicKey, 6);
   }
@@ -623,14 +644,70 @@ async function fetchAllArticles(topicKey) {
     fetchSmithsonianArticles(2)
   ]);
 
-  return [
-    ...wikiArticles,
-    ...stanfordArticles,
-    ...smithsonianArticles
-  ];
+  return [...wikiArticles, ...stanfordArticles, ...smithsonianArticles];
 }
 
-// --- API endpoint ---
+/**
+ * =========================
+ * Routes
+ * =========================
+ */
+
+// --- Shakespeare Sonnet (random) ---
+app.get('/api/sonnet', async (req, res) => {
+  try {
+    const indexResp = await axios.get(SONNETS_INDEX_URL, {
+      timeout: 10000,
+      headers: { 'User-Agent': 'HumanitiesFeed/1.0 (contact: you@example.com)' }
+    });
+
+    const $ = cheerio.load(indexResp.data || '');
+
+    const links = [];
+    $('a[href]').each((_, a) => {
+      const href = $(a).attr('href');
+      if (href && /^sonnet\.[IVXLCDM]+\.html$/i.test(href)) links.push(href);
+    });
+
+    if (!links.length) {
+      return res.status(500).json({ error: 'No sonnet links found on MIT index page' });
+    }
+
+    const pick = links[Math.floor(Math.random() * links.length)];
+    const url = new URL(pick, SONNETS_BASE_URL).toString();
+
+    const sonnetResp = await axios.get(url, {
+      timeout: 10000,
+      headers: { 'User-Agent': 'HumanitiesFeed/1.0 (contact: you@example.com)' }
+    });
+
+    const $$ = cheerio.load(sonnetResp.data || '');
+
+    const title =
+      $$('#aueditable h1').first().text().trim() ||
+      $$('h1').first().text().trim() ||
+      null;
+
+    let text = normalizeSonnetText($$('blockquote').first().text());
+    if (!text) text = normalizeSonnetText($$('pre').first().text());
+    if (!text) text = normalizeSonnetText($$('body').text());
+
+    const number = extractRomanFromHref(pick);
+
+    return res.json({
+      source: 'Shakespeare (MIT)',
+      number,
+      title,
+      text,
+      url
+    });
+  } catch (err) {
+    console.error('[SONNET] Error:', err?.message || err);
+    return res.status(500).json({ error: 'Failed to fetch sonnet' });
+  }
+});
+
+// --- Articles ---
 app.get('/api/articles', async (req, res) => {
   try {
     const now = Date.now();
@@ -676,7 +753,7 @@ app.get('/debug/smithsonian', async (req, res) => {
     res.json({
       rawCount: raw.length,
       cardCount: cards.length,
-      perUrl: smithsonianDebug,       // <-- NEW: per-URL diagnostics
+      perUrl: smithsonianDebug,
       rawSample: raw.slice(0, 5),
       cards
     });
@@ -686,7 +763,6 @@ app.get('/debug/smithsonian', async (req, res) => {
   }
 });
 
-
 // --- health & root ---
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', cacheSize: articleCache.length, lastRefresh });
@@ -695,7 +771,11 @@ app.get('/', (req, res) => {
   res.json({ status: 'ok', message: 'Historical Feed API is running' });
 });
 
-// --- Start server ---
+/**
+ * =========================
+ * Start server
+ * =========================
+ */
 console.log(`[BOOT] Starting Historical Feed API... (node ${process.version})`);
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`[BOOT] Listening on 0.0.0.0:${PORT}`);
